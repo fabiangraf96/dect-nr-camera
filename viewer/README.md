@@ -26,9 +26,20 @@ python3 -m venv .venv
 
 The video is on **VCOM1**, the *second* serial port the receiver DK enumerates;
 VCOM0 is the console and carries no video. The port is found automatically
-under `/dev/serial/by-id/` by looking for a J-Link `-if02` interface. With both
-DKs attached that is ambiguous — the transmitter's VCOM1 looks identical from
-the host — so name the receiver explicitly with `--port`.
+under `/dev/serial/by-id/` by looking for a J-Link `-if02` interface.
+
+With both DKs attached that is ambiguous — the transmitter also exposes a
+VCOM1, and it looks identical from the host — so the viewer refuses to guess
+and lists what it found:
+
+```
+Several DK data ports are attached; name one with --port:
+  /dev/serial/by-id/usb-SEGGER_J-Link_00<serial-a>-if02
+  /dev/serial/by-id/usb-SEGGER_J-Link_00<serial-b>-if02
+```
+
+Pick the receiver's. `nrfutil device list` maps serial numbers to boards if you
+are unsure which is which.
 
 Address ports by their `by-id` path rather than `/dev/ttyACMx`: the numbering
 changes whenever devices are re-enumerated, and two identical DKs then swap
