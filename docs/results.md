@@ -38,17 +38,38 @@ because the OV3660 compresses a static scene efficiently.
 
 ## Resolution ladder
 
-Same link, same q=12, changed at runtime with `cam res` from the TX shell.
+At q=6, changed at runtime, every step verified against the resolution the
+camera then announced. All four ran with **zero frame loss**.
 
-| Resolution | Pixels | JPEG/frame | fps at the PC | Link | Frames lost |
+| Resolution | Pixels | JPEG/frame | Fragments | fps at the PC | Link |
 |---|---|---|---|---|---|
-| QVGA 320×240 | 1.0× | 2.4 kB | **14.6** | 35 kB/s | 0 |
-| HVGA 480×320 | 2.0× | 3.9 kB | 6.5 | 59 kB/s | 0 |
-| VGA 640×480 | 4.0× | ~20 kB | 1.1 | 23 kB/s | — |
+| QVGA 320×240 | 1.0× | 2933 B | 5 | **13.7** | 41.6 kB/s |
+| CIF 400×296 | 1.5× | 3982 B | 6 | **13.7** | 56.5 kB/s |
+| HVGA 480×320 | 2.0× | 4744 B | 7–8 | **12.6** | 61.7 kB/s |
+| VGA 640×480 | 4.0× | 9271 B | 14–30 | 6.1 | 61.3 kB/s |
 
-QVGA leaves 57 % of the link unused; HVGA runs it close to the VCOM1 ceiling.
-VGA is not usable for live video on this link: at 1.1 fps the sensor also
-spends much of its time recovering from buffer overflows.
+Reading it:
+
+* **CIF is free.** Half again as many pixels as QVGA at exactly the same frame
+  rate, for 15 kB/s more.
+* **HVGA costs one frame per second for double the pixels.** This is the point
+  where detail stops being cheap but is still nearly free.
+* **VGA halves the frame rate, and not because of the link.** At 6.1 fps it is
+  drawing 61 kB/s, the same as HVGA — well under the ~83 kB/s ceiling. The
+  limit there is the camera path: the driver copies each frame out of its DMA
+  buffer into PSRAM, and at 640×480 that copy dominates.
+
+An earlier version of this table was wrong in two places, both worth recording
+because both are easy to repeat:
+
+* It reported HVGA at 6.5 fps and VGA at 1.1 fps. Those captures were over a
+  megabyte, so the decoder's runaway guard silently discarded half of each one
+  before parsing.
+* It labelled rows by the resolution that had been *requested*. A `cam res`
+  command whose arguments do not survive the shell arrives as a bare `cam`,
+  which prints a usage message and changes nothing — so the row was measured
+  at the previous resolution and named after the new one. `scripts/set_res.sh`
+  now checks the echo and waits for the camera to announce the change.
 
 ## Quality ladder
 
@@ -56,11 +77,16 @@ At QVGA, changed at runtime with `cam quality`:
 
 | q | JPEG/frame | Note |
 |---|---|---|
-| 12 | 2374 B | the default |
-| 6 | 2650 B | +12 %, visibly cleaner on detailed scenes |
+| 12 | 2374 B | |
+| 6 | 2650 B | the default; +12 %, visibly cleaner on detailed scenes |
 
 The OV3660 compresses a static scene efficiently, so dropping q costs far less
-than the rule of thumb suggests. There is ample link budget for q=6 at QVGA.
+than the rule of thumb suggests.
+
+Quality and resolution are not interchangeable. Lowering q preserves more of
+the detail the sensor captured; raising the resolution captures more detail in
+the first place. A soft 320×240 picture does not get sharper at q=4, because
+the limit is the pixel count.
 
 ## What each change was worth
 
