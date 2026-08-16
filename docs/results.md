@@ -7,19 +7,34 @@ UART 1 Mbaud with flow control → nRF9151 DK TX → DECT NR+ carrier 1665
 (1888.704 MHz), MCS 4, 8 subslots, TX power idx 13 → nRF9151 DK RX →
 VCOM1 1 Mbaud + RTS/CTS → PC.
 
-## End to end, QVGA (the default)
+## End to end, QVGA at q=6 (the default)
+
+Everything rebuilt from clean and reflashed, with hardware flow control active
+in both directions:
 
 ```
-TX board  : 61.6 pkt/s, 36.8 kB/s | radio ok 1235, err 0, lbt 0
-                                  | uart pkt 1235, crc 0, resync 4, overrun 0
-RX board  : 61.7 pkt/s, 43.2 kB/s | rssi -19.0 dBm, snr 24.75 dB
-                                  | pdc ok 1464, crc 0 | pcc ok 1464, crc 0
-PC stream : 35.5 kB/s | 1209 packets, 0 CRC errors, 1 resync
-            291 frames, 0 lost, 14.6 fps
-            291/291 decoded as 320x240
+TX board  : 76.7 pkt/s, 46.6 kB/s | radio ok 1535, err 0, lbt 0
+                                  | uart pkt 1535, crc 0, resync 3, overrun 0
+RX board  : 76.7 pkt/s, 53.7 kB/s | rssi -29.5 dBm, snr 23.5 dB
+                                  | pdc ok 1809, crc 0 | pcc ok 1809, crc 0
+PC stream : 43.4 kB/s | 1443 packets, 0 CRC errors, 1 resync
+            280 frames, 0 lost, 14.0 fps
+            280/280 decoded as 320x240
 ```
 
-JPEG 2369–2380 bytes per frame, 4 fragments each.
+JPEG 2982–3038 bytes per frame, 5 fragments each. About 52 % of the link is in
+use, so there is room for a better quality setting or a larger frame.
+
+An earlier run at q=12, for comparison — the same link carrying smaller frames:
+
+```
+291 frames, 0 lost, 14.6 fps, 35.5 kB/s
+JPEG 2369-2380 bytes per frame, 4 fragments each
+```
+
+Going from q=12 to q=6 costs about 27 % more data and roughly half a frame per
+second. The measured cost is far smaller than the usual rule of thumb suggests,
+because the OV3660 compresses a static scene efficiently.
 
 ## Resolution ladder
 
@@ -86,12 +101,46 @@ this project.
 
 ## Traps met along the way
 
-**The ESP32's CTS input needed inverting.** With the nRF asserting RTS — its
-output measured at 51 mV mean, 0 mV minimum, i.e. "receiver ready" — the ESP32
-would not transmit a byte. `uart_set_line_inverse(UART_SIGNAL_CTS_INV)` fixes
-it. Found by adding a `vdd` console command that reads the CTS wire through
-ADC1_CH0; running it was itself the clue, because reconfiguring the pin for the
-ADC detaches it from the UART and the stream started at once.
+**A stalled UART receiver in the nRF outlives a power cycle, and a measurement
+tool can lie.** This one cost more time than everything else together, and the
+wrong turnings are the interesting part.
+
+The camera refused to transmit: `link stalled ... is the nRF9151 powered and
+CTS wired?`, repeatedly, while the nRF was plainly alive. Inverting the CTS
+input made it run, so the polarity looked wrong and the inversion was kept.
+
+It was not a polarity problem. The `cts` command, once it sampled the pad under
+both an internal pull-down *and* an internal pull-up, settled it:
+
+```
+inversion on   -> pin high 100 %, 0 transitions -> 71 frames
+inversion off  -> pin high 100 %, 0 transitions ->  0 frames, 84 stalls
+```
+
+Identical pin state, opposite outcome. A receiver that is genuinely throttling
+has to move its RTS line; this one never did, because nothing was driving it —
+the ESP32's own pull-up held it high, and inverting the input turned
+"permanently not clear to send" into "permanently clear to send". Flow control
+was not fixed, it was switched off, and the inversion hid that.
+
+What had actually happened is that the nRF's uart2 receiver was left in a state
+where RTS stayed deasserted. It survived unplugging the board and running it
+from a battery; only reflashing cleared it. The ESP32 had been correct
+throughout: it was refusing to transmit into a receiver that said it was not
+ready.
+
+Two lessons worth keeping:
+
+* **A single logic level cannot distinguish "driven by the peer" from "held by
+  our own pull-up".** Sample under both pulls; a pin that overrides a pull-up
+  is being driven, and one that follows whichever pull is applied is floating.
+* **The first version of the diagnostic made things worse.** It read the pin
+  through the ADC, which stole it from the UART and never gave it back — so
+  merely running the command disabled flow control until the next reboot — and
+  its one-shot conversions were far too slow for a signal toggling at UART
+  rates, making every number it produced an aliasing artefact. The replacement
+  uses `gpio_get_level()`, which reads the pad regardless of routing and does
+  not disturb a live link.
 
 **`uart_write_bytes()` blocks past its own timeout.** Checking the ring buffer's
 free space beforehand is not enough of a guard: with CTS deasserted the capture
