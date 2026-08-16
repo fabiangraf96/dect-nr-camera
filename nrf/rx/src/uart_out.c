@@ -29,6 +29,16 @@ static const struct device *const uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart2));
 RING_BUF_DECLARE(tx_ring, CONFIG_DECTCAM_RX_RING_SIZE);
 
 /*
+ * Guards the producer side of tx_ring. See uart_out_send() for why: the ring
+ * buffer tolerates one producer, and this application has two.
+ *
+ * The consumer (pump_thread) needs no lock, since single-producer /
+ * single-consumer is exactly the case the ring buffer is designed for once the
+ * producers are serialised among themselves.
+ */
+static struct k_spinlock tx_lock;
+
+/*
  * Two chunk buffers so the next DMA transfer can be prepared while the
  * current one is in flight.
  */
@@ -80,12 +90,34 @@ int uart_out_send(const uint8_t *data, size_t len)
 	}
 
 	/*
+	 * Serialise the producers.
+	 *
+	 * Zephyr's ring buffer is lock-free for ONE producer and ONE consumer.
+	 * There are two producers here: the modem callback forwarding video,
+	 * and the main loop emitting a statistics packet once a second. When
+	 * the two interleave, both compute an allocation against the same head
+	 * index, the second ring_buf_put_finish() reports a size that no longer
+	 * fits, and its __ASSERT_NO_MSG fires:
+	 *
+	 *   ASSERTION FAIL [err == 0] @ zephyr/lib/utils/ring_buffer.c:72
+	 *   ZEPHYR FATAL ERROR 4: Kernel panic
+	 *
+	 * The window is a few instructions wide and the statistics packet is
+	 * sent once a second, so this took a long time to show up: the receiver
+	 * had run for hours before it landed. A spinlock is the right size of
+	 * fix -- the critical section is a memcpy of at most a few hundred
+	 * bytes, and the modem callback must not block.
+	 */
+	k_spinlock_key_t key = k_spin_lock(&tx_lock);
+
+	/*
 	 * All-or-nothing. ring_buf_put() would happily write a prefix and
 	 * report a short count, which is exactly the torn packet we must
 	 * avoid, so check the space first.
 	 */
 	if (ring_buf_space_get(&tx_ring) < len) {
 		s_stats.dropped++;
+		k_spin_unlock(&tx_lock, key);
 		return -ENOSPC;
 	}
 
@@ -94,11 +126,15 @@ int uart_out_send(const uint8_t *data, size_t len)
 	if (put != len) {
 		/* Should be unreachable given the check above. */
 		s_stats.dropped++;
+		k_spin_unlock(&tx_lock, key);
 		return -ENOSPC;
 	}
 
 	s_stats.queued++;
 	s_stats.bytes += len;
+
+	k_spin_unlock(&tx_lock, key);
+
 	k_sem_give(&data_ready);
 	return 0;
 }
