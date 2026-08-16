@@ -1,0 +1,55 @@
+/*
+ * Receiver: uart2 routed to the nRF9151 DK's VCOM1 pins, so the video stream
+ * leaves the board over the same USB-C cable that powers it.
+ *
+ *   P0.29 = TX  -> VCOM1 -> host
+ *   P0.28 = RX  <- VCOM1 <- host
+ *   P0.16 = RTS
+ *   P0.17 = CTS
+ *
+ * Verified on hardware: these pads do reach VCOM1, which appears as the
+ * SECOND of the two serial ports the DK enumerates.
+ *
+ * uart1 would be the natural choice for these pins, but
+ * nrf9151dk_nrf9151_ns.dts disables it because TF-M claims it for secure
+ * logging. uart2 is free and the nRF91 pin matrix allows any pad.
+ *
+ * hw-flow-control is REQUIRED, not optional. Measured over 20 s of continuous
+ * 1 Mbaud traffic:
+ *     without RTS/CTS : 80.4 kB/s, 13.1 % of blocks lost
+ *     with    RTS/CTS : 81.0 kB/s, 0.00 % lost
+ * Without it the USB path silently discards bytes and video is unusable.
+ */
+
+&pinctrl {
+	uart2_default: uart2_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 29)>,
+				<NRF_PSEL(UART_RTS, 0, 16)>;
+		};
+		group2 {
+			psels = <NRF_PSEL(UART_RX, 0, 28)>,
+				<NRF_PSEL(UART_CTS, 0, 17)>;
+			bias-pull-up;
+		};
+	};
+
+	uart2_sleep: uart2_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 29)>,
+				<NRF_PSEL(UART_RX, 0, 28)>,
+				<NRF_PSEL(UART_RTS, 0, 16)>,
+				<NRF_PSEL(UART_CTS, 0, 17)>;
+			low-power-enable;
+		};
+	};
+};
+
+&uart2 {
+	status = "okay";
+	current-speed = <1000000>;
+	hw-flow-control;
+	pinctrl-0 = <&uart2_default>;
+	pinctrl-1 = <&uart2_sleep>;
+	pinctrl-names = "default", "sleep";
+};

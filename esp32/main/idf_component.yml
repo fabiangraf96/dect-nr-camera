@@ -1,0 +1,5 @@
+dependencies:
+  idf: ">=5.0"
+  # Espressif's DVP camera driver for the classic ESP32 (I2S0 camera slave
+  # mode). This is the piece Zephyr does not have for this SoC.
+  espressif/esp32-camera: "^2.0.15"

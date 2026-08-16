@@ -1,0 +1,69 @@
+# rsource, not source: plain `source` resolves against $srctree (ZEPHYR_BASE),
+# whereas rsource is relative to this file, which is what we want for a
+# sibling directory.
+rsource "../common/Kconfig.dectcam"
+
+menu "DECT camera transmitter"
+
+config DECTCAM_TX_UART_BAUD
+	int "Baud rate of the link from the camera board"
+	default 1000000
+	help
+	  Must match CONFIG_DECTCAM_UART_BAUD on the ESP32. 1 Mbaud is the
+	  nRF9151 UARTE maximum.
+
+config DECTCAM_TX_RING_SIZE
+	int "Input ring buffer size (bytes)"
+	default 8192
+	help
+	  Buffers packets arriving from the ESP32 while the radio is busy.
+
+	  Deliberately modest: this is live video, so a deep buffer only adds
+	  latency. When it overflows the oldest bytes are discarded and the
+	  decoder resynchronises on the next packet magic.
+
+config DECTCAM_TX_LBT
+	bool "Listen before talk"
+	default n
+	help
+	  Measure channel RSSI before each transmission and skip the slot if
+	  the channel is busy.
+
+	  Streaming video is a near-continuous transmit duty cycle, which the
+	  NCS DECT samples make no attempt to regulate. Enabling this is a
+	  step towards the channel-access behaviour ETSI EN 301 406-2 expects,
+	  at the cost of throughput and jitter.
+
+	  It is NOT a completeness claim: this is lab equipment and confirming
+	  local compliance remains the operator's responsibility.
+
+config DECTCAM_TX_LBT_THRESHOLD
+	int "LBT RSSI threshold (dBm)"
+	default -70
+	depends on DECTCAM_TX_LBT
+	help
+	  Channel is considered busy above this level.
+
+config DECTCAM_TX_TEST_PATTERN
+	bool "Transmit a generated test pattern instead of UART input"
+	default n
+	help
+	  Emits synthetic frames without needing the ESP32 connected, so the
+	  radio link can be brought up and measured on its own. Pairs with the
+	  receiver and the PC viewer to validate everything except the camera.
+
+config DECTCAM_TX_TEST_PATTERN_SIZE
+	int "Test pattern frame size (bytes)"
+	default 6000
+	depends on DECTCAM_TX_TEST_PATTERN
+
+config DECTCAM_TX_TEST_PATTERN_FPS
+	int "Test pattern frame rate"
+	default 10
+	depends on DECTCAM_TX_TEST_PATTERN
+
+endmenu
+
+menu "Zephyr Kernel"
+source "Kconfig.zephyr"
+endmenu

@@ -1,0 +1,36 @@
+# rsource, not source: plain `source` resolves against $srctree (ZEPHYR_BASE),
+# whereas rsource is relative to this file.
+rsource "../common/Kconfig.dectcam"
+
+menu "DECT camera receiver"
+
+config DECTCAM_RX_UART_BAUD
+	int "Baud rate of the VCOM1 link to the PC"
+	default 1000000
+	help
+	  1 Mbaud is the nRF9151 UARTE maximum and was measured to carry
+	  81 kB/s losslessly through the DK's interface MCU, provided
+	  hardware flow control is enabled.
+
+config DECTCAM_RX_RING_SIZE
+	int "Output ring buffer size (bytes)"
+	default 16384
+	help
+	  Absorbs bursts from the radio while the 1 Mbaud VCOM drains.
+
+	  When it overflows the NEWEST packet is dropped rather than
+	  corrupting what is already queued, because a partial packet at the
+	  PC costs a resynchronisation.
+
+config DECTCAM_RX_STATS_PACKETS
+	bool "Send link statistics to the PC"
+	default y
+	help
+	  Emit a STATS packet about once a second carrying RSSI, SNR and PDC
+	  counters, so the viewer HUD can show link quality.
+
+endmenu
+
+menu "Zephyr Kernel"
+source "Kconfig.zephyr"
+endmenu

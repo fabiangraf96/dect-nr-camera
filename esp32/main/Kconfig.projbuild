@@ -1,0 +1,234 @@
+menu "DECT camera transmitter"
+
+comment "Camera"
+
+choice DECTCAM_FRAMESIZE
+    prompt "Initial frame size"
+    default DECTCAM_FRAMESIZE_QVGA
+    help
+      Startup resolution. Changeable at runtime with the `cam res` console
+      command; this only sets the power-on default.
+
+      The end-to-end link is limited to about 83 kB/s by the receiver's VCOM1
+      USB path, so larger frames buy detail at the cost of frame rate.
+
+config DECTCAM_FRAMESIZE_QQVGA
+    bool "QQVGA 160x120  (~1-2 kB/frame)"
+config DECTCAM_FRAMESIZE_QVGA
+    bool "QVGA 320x240   (~4-9 kB/frame)"
+config DECTCAM_FRAMESIZE_CIF
+    bool "CIF 352x288    (~6-12 kB/frame)"
+config DECTCAM_FRAMESIZE_VGA
+    bool "VGA 640x480    (~15-35 kB/frame)"
+endchoice
+
+config DECTCAM_JPEG_QUALITY
+    int "Initial JPEG quality (4-63, LOWER is better)"
+    range 4 63
+    default 6
+    help
+      OV3660 quantisation scale. This is inverted relative to the usual
+      0-100 convention: 4 is near-lossless and huge, 63 is tiny and ugly.
+
+      Measured on this link at QVGA, both with zero frame loss:
+        q=12   2374 B/frame   14.6 fps   35 kB/s
+        q=6    2650 B/frame   14.6 fps   39 kB/s
+
+      q=6 is the default because it costs only 12 % more data for visibly
+      cleaner edges, and the link has 57 % of its capacity spare at QVGA. The
+      OV3660 compresses a static scene efficiently, so dropping q costs far
+      less here than the usual rule of thumb suggests.
+
+      Adjustable at runtime with `cam quality N`, from the transmitter's shell
+      or the camera's own console.
+
+config DECTCAM_TARGET_FPS
+    int "Target frame rate"
+    range 1 30
+    default 15
+    help
+      Upper bound on capture rate. The link may not sustain it; the actual
+      rate is whatever the UART drains.
+
+config DECTCAM_XCLK_HZ
+    int "Camera XCLK frequency (Hz)"
+    default 20000000
+    help
+      The sensor derives its PLL, and hence its pixel clock, from XCLK, so this
+      sets the frame rate more than anything else does. Measured on this board
+      with an OV3660 at QVGA q12:
+
+        10 MHz -> PCLK  5 MHz -> ~65 ms per frame -> 6.1 fps, 17 kB/s
+        20 MHz -> PCLK 10 MHz -> ~30 ms per frame -> 13.9 fps, 38 kB/s
+
+      Note that Freenove's own example uses 10 MHz, and that at 20 MHz the log
+      shows a couple of "NO-SOI - JPEG start marker missing" lines at start-up.
+      Those are the first one or two frames while the sensor settles; the
+      camera driver discards them and the stream that follows is clean. They
+      are not a reason to drop the clock -- during bring-up they were
+      misread as one, and the real cause of the stalled stream turned out to be
+      an unconnected CTS line.
+
+config DECTCAM_VFLIP
+    bool "Flip image vertically"
+    default n
+
+config DECTCAM_HMIRROR
+    bool "Mirror image horizontally"
+    default n
+
+comment "Link to the nRF9151 transmitter"
+
+config DECTCAM_UART_NUM
+    int "UART port number"
+    range 1 2
+    default 1
+    help
+      UART1. UART0 is left alone so the module can still be flashed and can
+      print its console log over the CH343 bridge while the data link is live.
+
+config DECTCAM_UART_TX_GPIO
+    int "UART TX GPIO (to nRF9151 RX)"
+    default 42
+    help
+      The ESP32-S3's GPIO matrix allows any peripheral on any pin, so the
+      choice is driven by what is left over -- and by which header the pin
+      sits on.
+
+      Taken by other functions: the camera (4-18), microSD (38-40), octal
+      PSRAM (35-37), native USB (19/20) and the CH343 console (43/44).
+      Excluded on purpose: strapping pins 0, 3, 45 and 46; the on-board LEDs
+      on 2 and 48.
+
+      GPIO42 rather than the more obvious GPIO14: on this module GPIO14 is on
+      the left-hand header while CTS, RTS, RX and GND are all on the right.
+      Plugged into a breadboard the module covers the left header entirely, so
+      a pin there cannot be reached at all. GPIO42 is one of the JTAG pins
+      (MTMS), which is free here because the S3 debugs over its native USB
+      rather than these pads, and it has no boot strapping function.
+
+config DECTCAM_UART_RX_GPIO
+    int "UART RX GPIO (from nRF9151 TX)"
+    default 21
+
+config DECTCAM_UART_FLOWCTRL
+    bool "Use hardware flow control"
+    default y
+    help
+      Strongly recommended: on the equivalent VCOM link, disabling flow
+      control cost 13 % of all bytes.
+
+      Unlike the earlier AI-Thinker build, this board has a spare boot-safe
+      output pin, so RTS and CTS are both wired. That matters for the nRF9151
+      as well: its UARTE has a single hardware-flow-control bit covering RTS
+      and CTS together, with no RTS-only mode, so the previous build had to
+      fake a permanently-asserted CTS with a pull-down on an unconnected pin.
+      Now the signal is real.
+
+config DECTCAM_UART_CTS_GPIO
+    int "UART CTS GPIO (from nRF9151 RTS)"
+    default 1
+    depends on DECTCAM_UART_FLOWCTRL
+    help
+      Input. The nRF asserts this when its receive buffer is filling, which
+      stops us mid-stream instead of letting bytes fall on the floor.
+
+config DECTCAM_UART_CTS_INVERT
+    bool "Invert the CTS input"
+    default n
+    depends on DECTCAM_UART_FLOWCTRL
+    help
+      Leave this off. It exists as a documented trap, not as an option worth
+      using.
+
+      It was briefly enabled during bring-up because it appeared to fix a
+      stalled link, and it does make the stream run -- but for the wrong
+      reason. The `cts` console command settles it: with the link saturated
+      at 15 fps, the CTS pin reads HIGH on 20000 consecutive samples with
+      zero transitions, both with the inversion and without it. A genuine
+      RTS signal from a receiver that is throttling would have to move.
+
+      Nothing is driving the pin. The ESP32's internal pull-up holds it high,
+      and inverting the input turns "permanently not clear to send" into
+      "permanently clear to send" -- which disables flow control while
+      appearing to fix it, and hides the fact that the D6 wire is not making
+      contact.
+
+      With the wire connected the polarity needs no help: the nRF asserts RTS
+      low when it is ready, and the ESP32 treats CTS low as clear to send.
+
+config DECTCAM_UART_RTS_GPIO
+    int "UART RTS GPIO (to nRF9151 CTS)"
+    default 47
+    depends on DECTCAM_UART_FLOWCTRL
+    help
+      Output. Throttles the nRF's back-channel commands. Those are tiny and
+      rare, so this line rarely does any work -- but it must be wired for the
+      nRF's own flow control to be usable at all (see DECTCAM_UART_FLOWCTRL).
+
+config DECTCAM_UART_BAUD
+    int "UART baud rate"
+    default 1000000
+    help
+      1 Mbaud is the nRF9151 UARTE's maximum, so it is the natural operating
+      point for the pair. The ESP32-S3 could go several times faster on its
+      own, but there would be nothing at the other end to receive it.
+
+config DECTCAM_FRAG_PAYLOAD
+    int "Fragment payload size (bytes)"
+    range 32 1024
+    default 687
+    help
+      Must equal the DECT transport block size minus the 13-byte protocol
+      overhead, so that one fragment fits exactly one DECT PDC.
+
+      Default 687 = 700 (MCS 4, 8 subslots) - 13.
+
+      This MUST match CONFIG_DECTCAM_MCS / CONFIG_DECTCAM_PACKET_LEN_SUBSLOTS
+      on the nRF9151 transmitter. See docs/architecture.md for
+      the transport block size table.
+
+config DECTCAM_METAINTERVAL_MS
+    int "FRAME_META keepalive interval (ms)"
+    default 1000
+    help
+      How often stream parameters are re-announced so a viewer that attaches
+      mid-stream learns them quickly.
+
+comment "Diagnostics"
+
+config DECTCAM_STATS_INTERVAL_MS
+    int "Console statistics interval (ms), 0 to disable"
+    default 5000
+
+config DECTCAM_TEST_PATTERN
+    bool "Send a synthetic test pattern instead of camera frames"
+    default n
+    help
+      Emits a generated JPEG without touching the camera. Useful for bringing
+      up the radio link before the camera is wired, and for isolating camera
+      faults from link faults.
+
+config DECTCAM_BENCH_UART0
+    bool "Bench mode: stream out of UART0 instead of the nRF link"
+    default n
+    help
+      Sends the packet stream out of UART0, the console port, so the whole
+      camera -> JPEG -> fragment -> protocol chain can be verified with no
+      jumper wires connected at all. Point the PC viewer at the ESP32's own
+      serial port.
+
+      The console REPL and all logging are disabled in this mode, because log
+      text on the same wire would corrupt the binary stream.
+
+      Turn this OFF for the real system.
+
+config DECTCAM_BENCH_UART0_BAUD
+    int "Bench mode UART0 baud"
+    default 921600
+    depends on DECTCAM_BENCH_UART0
+    help
+      The CH343 bridge copes with this comfortably. Drop to 115200 if a
+      capture shows corruption.
+
+endmenu

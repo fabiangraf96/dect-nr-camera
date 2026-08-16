@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "cam.c"
+        "link.c"
+        "console_cmds.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_timer
+        console
+        nvs_flash
+)

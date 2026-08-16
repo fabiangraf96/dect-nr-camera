@@ -1,0 +1,6 @@
+# Use opencv-python, NOT opencv-python-headless: the headless wheel reports
+# "GUI: NONE" and cannot open a window, so the live viewer has nothing to draw
+# into. The headless build is fine if you only ever use --no-gui or analyze.
+opencv-python>=4.9
+numpy>=1.26
+pyserial>=3.5

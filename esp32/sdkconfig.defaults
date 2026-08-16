@@ -1,0 +1,56 @@
+# Freenove ESP32-S3 WROOM CAM - DECT camera transmitter
+#
+# ESP32-S3-WROOM-1 N16R8: 16 MB quad flash, 8 MB octal PSRAM, OV2640.
+#
+# This replaces the earlier AI-Thinker ESP32-CAM build. That one ran with PSRAM
+# disabled and the sensor clock halved, both of them workarounds for a
+# breadboard 5 V rail that browned out during sensor start-up. This board is
+# powered from its own USB-C connector, so neither workaround is needed and the
+# settings below are the ones the hardware was designed for.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# 8 MB octal PSRAM.
+#
+# This is what the upgrade is really about: with frame buffers in PSRAM the
+# camera can double-buffer, so capture and transmit overlap instead of
+# alternating, and larger frames stop being a memory question.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# Full 240 MHz. The previous board was clocked down to 160 MHz to save current
+# on a struggling supply; that reason is gone, and the JPEG path benefits from
+# the headroom.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# JPEG frame buffer size.
+#
+# esp32-camera's automatic setting is width * height / 5, which is 15 kB at
+# QVGA and 60 kB at VGA. That is not enough at the better quality settings:
+# switching to VGA at q=12 overflows it, the driver prints "FB-OVF", stops the
+# capture engine, and every following grab times out.
+#
+# 128 kB is generous enough for VGA at high quality and costs 256 kB of the
+# 8 MB PSRAM for the two buffers, which is not worth economising over.
+CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_AUTO=n
+CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM=y
+CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE=131072
+
+# Brownout detection stays enabled. It should never trigger on USB power; if it
+# does, that is a real supply fault worth seeing rather than masking.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
+
+# Console on UART0, which reaches the host through the on-board CH343 bridge.
+# The data link to the nRF9151 uses UART1 and is undisturbed by it.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096

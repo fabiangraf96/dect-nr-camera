@@ -1,0 +1,68 @@
+/*
+ * Transmitter: uart2 routed to the Arduino header for the ESP32-S3 camera link.
+ *
+ *   P0.02 = Arduino D2 = RX  (from ESP32-S3 GPIO42)
+ *   P0.03 = Arduino D3 = TX  (to   ESP32-S3 GPIO21)
+ *   P0.06 = Arduino D6 = RTS (to   ESP32-S3 GPIO1  / CTS)
+ *   P0.07 = Arduino D7 = CTS (from ESP32-S3 GPIO47 / RTS)
+ *
+ * uart1 is not used: nrf9151dk_nrf9151_ns.dts disables it because TF-M claims
+ * it for secure logging. uart2 is free and the nRF91 pin matrix lets us put
+ * it on any pad.
+ *
+ * P0.00/01/04/05 are LEDs and P0.08/09/18/19 are buttons, so P0.02/03/06/07
+ * are the free Arduino-header pins.
+ *
+ * Flow control
+ * -------------
+ * On the nRF UARTE, hardware flow control is a single CONFIG.HWFC bit covering
+ * RTS *and* CTS -- Zephyr offers no RTS-only mode (see UARTE_NRF_CONFIG in
+ * uart_nrfx_uarte.c). We want RTS, so we get CTS whether we like it or not.
+ *
+ * The previous camera board, an AI-Thinker ESP32-CAM, had no spare boot-safe
+ * output pin to drive our CTS, so CTS was parked on P0.07 with an internal
+ * pull-down: permanently "clear to send", with D7 required to stay
+ * unconnected. The ESP32-S3 has the pin, so this is now a real signal.
+ *
+ * The pull-down is kept deliberately. It costs nothing while the ESP32 drives
+ * the line, and if that wire is ever missing the input reads as asserted and
+ * the transmitter keeps working, rather than floating and behaving
+ * unpredictably.
+ */
+
+&pinctrl {
+	uart2_default: uart2_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 3)>,
+				<NRF_PSEL(UART_RTS, 0, 6)>;
+		};
+		group2 {
+			psels = <NRF_PSEL(UART_RX, 0, 2)>;
+			bias-pull-up;
+		};
+		group3 {
+			/* Driven by the ESP32-S3; pull-down is the safe fallback. */
+			psels = <NRF_PSEL(UART_CTS, 0, 7)>;
+			bias-pull-down;
+		};
+	};
+
+	uart2_sleep: uart2_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 3)>,
+				<NRF_PSEL(UART_RX, 0, 2)>,
+				<NRF_PSEL(UART_RTS, 0, 6)>,
+				<NRF_PSEL(UART_CTS, 0, 7)>;
+			low-power-enable;
+		};
+	};
+};
+
+&uart2 {
+	status = "okay";
+	current-speed = <1000000>;
+	hw-flow-control;
+	pinctrl-0 = <&uart2_default>;
+	pinctrl-1 = <&uart2_sleep>;
+	pinctrl-names = "default", "sleep";
+};

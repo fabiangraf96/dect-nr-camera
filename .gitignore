@@ -1,0 +1,43 @@
+# --- build output -----------------------------------------------------------
+build/
+build_*/
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+
+# Zephyr / west
+.west/
+twister-out*/
+
+# ESP-IDF: sdkconfig is generated from sdkconfig.defaults and the sdkconfig.*
+# fragments, which are the files worth versioning.
+sdkconfig
+sdkconfig.old
+sdkconfig.*_gen
+sdkconfig.*_gen.old
+managed_components/
+dependencies.lock
+
+# --- Python -----------------------------------------------------------------
+.venv/
+__pycache__/
+*.pyc
+
+# --- captures and saved frames ----------------------------------------------
+*.pcap
+captures/
+frames/
+*.png
+
+# --- local-only ---------------------------------------------------------------
+# Helper scripts for this particular bench: they hard-code board serial
+# numbers, USB paths and toolchain locations, so they are of no use to anyone
+# else and are kept out of the repository on purpose. Everything they automate
+# is documented as plain west / idf.py / python commands in the READMEs.
+scripts/
+
+# The original project brief. Kept locally for reference; it is a personal
+# working document, not project documentation.
+docs/brief.md

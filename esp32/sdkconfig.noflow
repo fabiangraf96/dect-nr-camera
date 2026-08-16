@@ -1,0 +1,25 @@
+# Overlay: drop CTS hardware flow control on the link to the nRF9151.
+#
+# Rationale
+# ---------
+# Flow control needs a third wire (nRF RTS -> ESP32 IO15) and that wire has
+# been a persistent source of trouble on this breadboard build. It is also not
+# strictly required here:
+#
+#   camera produces   ~40-50 kB/s at QVGA q12 / 15 fps
+#   radio drains       ~63 kB/s
+#   nRF RX ring         8 kB, DMA backed
+#
+# The receiver is faster than the sender, so back-pressure should never be
+# needed in steady state. If it ever is, the nRF counts overruns and the PC
+# decoder resynchronises on the next packet magic - a frame is lost, nothing
+# breaks.
+#
+# With this overlay the link needs exactly two wires plus ground:
+#   ESP32 IO13 -> nRF P0.02 (D2)   data
+#   GND        <-> GND
+#
+# Build:
+#   idf.py -B build_noflow -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.noflow" \
+#          -DSDKCONFIG=sdkconfig.noflow_gen build
+CONFIG_DECTCAM_UART_FLOWCTRL=n

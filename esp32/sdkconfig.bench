@@ -1,0 +1,12 @@
+# Bench overlay: stream out of UART0 so the camera -> JPEG -> fragment ->
+# protocol chain can be validated with no jumper wires.
+#
+# Build with:
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.bench" build
+#
+# Turn this off for the real system.
+CONFIG_DECTCAM_BENCH_UART0=y
+CONFIG_DECTCAM_BENCH_UART0_BAUD=921600
+CONFIG_DECTCAM_FRAMESIZE_QVGA=y
+CONFIG_DECTCAM_JPEG_QUALITY=12
+CONFIG_DECTCAM_TARGET_FPS=10
