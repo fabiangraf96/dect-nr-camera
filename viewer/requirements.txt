@@ -4,3 +4,10 @@
 opencv-python>=4.9
 numpy>=1.26
 pyserial>=3.5
+
+# The control panel. tkinter itself is in the standard library, but on Debian
+# and Ubuntu it is packaged separately -- install python3-tk if importing it
+# fails. Pillow is what gets a decoded frame into a Tk widget quickly enough
+# to be worth calling live.
+pillow>=10.0
+

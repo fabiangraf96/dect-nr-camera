@@ -62,6 +62,16 @@ class SerialSource:
         except queue.Empty:
             return b""
 
+    def write(self, data: bytes) -> None:
+        """Send bytes back to the receiver.
+
+        The port is full duplex and mostly unused in this direction, so control
+        telegrams travel here rather than over a second connection. Writes are
+        tiny and infrequent; the read thread is unaffected.
+        """
+        self._ser.write(data)
+        self._ser.flush()
+
     @property
     def overruns(self) -> int:
         return self._overruns
