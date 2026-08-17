@@ -381,6 +381,8 @@ class Panel:
             notes.append(f"{src.errors} serial errors ({src.last_error[:60]})")
         if getattr(src, "overruns", 0):
             notes.append(f"{src.overruns} host overruns: not keeping up")
+        if getattr(src, "backlog", 0) > 2:
+            notes.append(f"{src.backlog} chunks buffered: picture is behind")
 
         d = r.dec
         if d.n_crc_err:

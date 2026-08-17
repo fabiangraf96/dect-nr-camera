@@ -23,6 +23,17 @@ struct dcam_frame {
 	uint16_t width;
 	uint16_t height;
 	void *handle; /* opaque; pass back to dcam_release() */
+
+	/*
+	 * When the sensor finished this frame, on esp_timer_get_time()'s clock.
+	 *
+	 * Compared against the time the last fragment leaves the UART, this
+	 * gives the delay the transmitter is responsible for: exposure, JPEG
+	 * encoding, any wait in the driver's buffer queue, and fragmenting
+	 * onto the wire. It is the only part of the end to end delay that can
+	 * be measured without a common clock at the two ends.
+	 */
+	int64_t capture_us;
 };
 
 /* Bring up the camera with the Kconfig defaults. */

@@ -265,6 +265,14 @@ esp_err_t dcam_grab(struct dcam_frame *out)
 	out->width = fb->width;
 	out->height = fb->height;
 	out->handle = fb;
+
+	/*
+	 * esp32-camera stamps each buffer as the sensor completes it, on the
+	 * same clock as esp_timer_get_time(), so the two are directly
+	 * comparable.
+	 */
+	out->capture_us = (int64_t)fb->timestamp.tv_sec * 1000000
+			  + fb->timestamp.tv_usec;
 	return ESP_OK;
 }
 

@@ -111,6 +111,37 @@ available for resolution or quality.
 The VCOM1 hop remains the ceiling. At HVGA the receiver starts dropping packets
 into it, which is what limits that row of the ladder.
 
+## Delay budget, measured
+
+QVGA at q=6, 13.9 fps, 41 kB/s. Latency is buffering, so each stage is measured
+as the bytes standing in it; a queue that fills once tends to stay full, because
+it drains at exactly the rate it fills.
+
+| Stage | Standing | Delay | How it is measured |
+|---|---|---|---|
+| Sensor → last fragment on the UART | — | **114 ms** avg, 132 ms max | `scripts/cam_age.sh` |
+| Radio + receiver's outbound ring | **0 B** | ~0 ms | `scripts/measure_latency.sh` |
+| Host queue | 0.39 chunks avg, 6 worst | ~10 ms | `scripts/host_backlog.sh` |
+
+The camera dominates, and roughly one frame period of that is inherent: with
+`fb_count = 2` the sensor fills one buffer while the previous is still being
+fragmented.
+
+Two things that looked like the cause and were not:
+
+- The receiver's 16 kB ring was seen completely full, which would have been
+  410 ms. It only fills when nothing is reading the data port -- CTS stays
+  deasserted and the ring backs up. With any reader attached it measures 0 B,
+  so the ring size is left alone: it is a shock absorber that is normally
+  empty, and shrinking it would only cost tolerance for a host that stalls.
+- `uart q` in the receiver's log counts packets *through* the ring, not the
+  depth *of* it, and reads as alarmingly large while saying nothing about delay.
+
+The receiver's own console cannot be used to watch this while video is flowing:
+both virtual COM ports are on one J-Link, and VCOM1 carrying the stream starves
+the VCOM0 console into silence. That is why the ring depth is carried in the
+statistics packet instead, arriving over the link that is working.
+
 ## Radio quality
 
 Boards roughly 30 cm apart, indoors:

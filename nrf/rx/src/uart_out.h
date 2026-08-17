@@ -36,8 +36,13 @@ struct uart_out_stats {
 	uint32_t queued;
 	uint32_t dropped;
 	uint64_t bytes;
+	uint32_t peak;	/* high water mark of the ring, in bytes */
 };
 
 void uart_out_get_stats(struct uart_out_stats *out);
+
+/* Read and clear the ring high water mark. One caller only: see the note in
+ * uart_out.c. */
+uint32_t uart_out_take_peak(void);
 
 #endif /* DECTCAM_UART_OUT_H */

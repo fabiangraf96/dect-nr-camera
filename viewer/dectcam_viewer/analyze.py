@@ -31,7 +31,14 @@ def main(argv=None) -> int:
     rea = Reassembler()
     frames = []
 
+    ring_peaks = []
+
     for pkt in dec.feed(data):
+        if pkt.type == proto.TYPE_STATS:
+            try:
+                ring_peaks.append(proto.Stats.unpack(pkt.payload).ring_peak)
+            except Exception:
+                pass
         for f in rea.push(pkt):
             frames.append(f)
 
@@ -51,6 +58,20 @@ def main(argv=None) -> int:
     print(f"fragments    : {rea.n_frags} (dup {rea.n_frags_dup})")
     if args.secs and rea.n_frames_ok:
         print(f"frame rate   : {rea.n_frames_ok/args.secs:.1f} fps")
+
+    if ring_peaks and args.secs:
+        # Buffered bytes are buffered time. Whatever stands in the receiver's
+        # outbound ring has been pulled off the air but not yet handed to the
+        # PC, so it is delay between the world moving and the screen showing
+        # it -- and a queue that fills once tends to stay full, because it
+        # drains at exactly the rate it fills.
+        rate = len(data) / args.secs
+        worst = max(ring_peaks)
+        typical = sorted(ring_peaks)[len(ring_peaks) // 2]
+        print()
+        print("--- buffered delay at the receiver ---")
+        print(f"ring typical : {typical} B  ({typical/rate*1000:.0f} ms)")
+        print(f"ring worst   : {worst} B  ({worst/rate*1000:.0f} ms)")
 
     if rea.meta:
         m = rea.meta

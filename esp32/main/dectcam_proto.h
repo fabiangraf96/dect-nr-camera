@@ -60,10 +60,49 @@ extern "C" {
 #define DECTCAM_TYPE_FRAME_META 2u
 #define DECTCAM_TYPE_STATS      3u
 #define DECTCAM_TYPE_CTRL       4u
+/*
+ * What the transmitter's radio is currently set to.
+ *
+ * Announced periodically for the same reason FRAME_META is: the operator can
+ * change these at run time, and a viewer that attaches later has no other way
+ * to learn where the link ended up. It also closes the loop on a command --
+ * the acknowledgement says "applied", this says what it was applied to.
+ */
+#define DECTCAM_TYPE_RADIO_CFG  5u
 
 /* Payload sizes of the fixed-layout types. */
-#define DECTCAM_META_LEN  8u
-#define DECTCAM_STATS_LEN 16u
+#define DECTCAM_META_LEN      8u
+#define DECTCAM_STATS_LEN     18u
+#define DECTCAM_CTRL_LEN      6u
+#define DECTCAM_RADIO_CFG_LEN 8u
+
+/*
+ * Control opcodes, carried in a DECTCAM_TYPE_CTRL packet.
+ *
+ * Control flows the opposite way to video: the PC sends a CTRL packet down the
+ * receiver's USB link, the receiver forwards it over the air to the
+ * transmitter, and the transmitter either applies it to its own radio or hands
+ * it to the camera over the UART back-channel.
+ *
+ * The transmitter answers by inserting CTRL_ACK into the video stream, which
+ * already flows the right way, so no extra channel is needed for
+ * acknowledgement.
+ */
+#define DECTCAM_CTRL_NOP           0u
+#define DECTCAM_CTRL_SET_TX_POWER  1u  /* arg: power index 0..13            */
+#define DECTCAM_CTRL_SET_MCS       2u  /* arg: 0..4                         */
+#define DECTCAM_CTRL_SET_CARRIER   3u  /* arg: carrier number               */
+#define DECTCAM_CTRL_SET_RES       4u  /* arg: index into the size table    */
+#define DECTCAM_CTRL_SET_FPS       5u  /* arg: 1..30                        */
+#define DECTCAM_CTRL_SET_QUALITY   6u  /* arg: 4..63, lower is better       */
+#define DECTCAM_CTRL_ACK           7u  /* arg: status, 0 = applied          */
+#define DECTCAM_CTRL_CARRIER_OK    8u  /* receiver confirms the new carrier */
+
+/* Status values reported in a CTRL_ACK. */
+#define DECTCAM_ACK_OK        0u
+#define DECTCAM_ACK_BAD_ARG   1u
+#define DECTCAM_ACK_UNSUPP    2u
+#define DECTCAM_ACK_FAILED    3u
 
 /*
  * Largest payload we will ever have to buffer on a receiver. The transmitter
@@ -314,6 +353,20 @@ struct dectcam_stats {
 	uint32_t pdc_ok;
 	uint32_t pdc_crc_err;
 	uint32_t frags_out;
+
+	/*
+	 * Deepest the receiver's outbound ring got since the last statistics
+	 * packet, in bytes.
+	 *
+	 * This is the delay between something happening and the PC seeing it,
+	 * expressed as a queue: whatever stands here has been received off the
+	 * air but not yet handed to the host. Divide by the byte rate to get
+	 * seconds. It belongs in the packet rather than the log because the
+	 * two virtual COM ports share one USB device, and while video is
+	 * flowing on VCOM1 the console on VCOM0 is starved -- so the console
+	 * is silent at exactly the moment the number matters.
+	 */
+	uint16_t ring_peak;
 };
 
 static inline void dectcam_stats_pack(uint8_t out[DECTCAM_STATS_LEN],
@@ -324,6 +377,7 @@ static inline void dectcam_stats_pack(uint8_t out[DECTCAM_STATS_LEN],
 	dectcam_put_u32(&out[4], s->pdc_ok);
 	dectcam_put_u32(&out[8], s->pdc_crc_err);
 	dectcam_put_u32(&out[12], s->frags_out);
+	dectcam_put_u16(&out[16], s->ring_peak);
 }
 
 static inline void dectcam_stats_unpack(const uint8_t in[DECTCAM_STATS_LEN],
@@ -334,6 +388,96 @@ static inline void dectcam_stats_unpack(const uint8_t in[DECTCAM_STATS_LEN],
 	s->pdc_ok = dectcam_get_u32(&in[4]);
 	s->pdc_crc_err = dectcam_get_u32(&in[8]);
 	s->frags_out = dectcam_get_u32(&in[12]);
+	s->ring_peak = dectcam_get_u16(&in[16]);
+}
+
+/* ------------------------------------------------------------------ */
+/* CTRL payload helpers                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A control telegram.
+ *
+ * `seq` exists because control frames are sent repeatedly: the transmitter
+ * only listens in short windows between video bursts, so a single copy would
+ * usually be missed. The receiver of a telegram ignores a `seq` it has already
+ * acted on, which makes retransmission free of side effects -- important when
+ * the opcode is "step the transmit power down one".
+ *
+ * `arg32` is wide enough for any parameter so far and leaves room; `arg` is
+ * simply its low half, kept as a separate accessor because every current
+ * opcode fits in 16 bits.
+ */
+struct dectcam_ctrl {
+	uint8_t opcode;
+	uint8_t seq;
+	uint32_t arg32;
+};
+
+static inline void dectcam_ctrl_pack(uint8_t out[DECTCAM_CTRL_LEN],
+				     const struct dectcam_ctrl *c)
+{
+	out[0] = c->opcode;
+	out[1] = c->seq;
+	dectcam_put_u32(&out[2], c->arg32);
+}
+
+static inline void dectcam_ctrl_unpack(const uint8_t in[DECTCAM_CTRL_LEN],
+				       struct dectcam_ctrl *c)
+{
+	c->opcode = in[0];
+	c->seq = in[1];
+	c->arg32 = dectcam_get_u32(&in[2]);
+}
+
+/* ------------------------------------------------------------------ */
+/* RADIO_CFG payload helpers                                          */
+/* ------------------------------------------------------------------ */
+
+struct dectcam_radio_cfg {
+	uint16_t carrier;
+	uint8_t mcs;
+	uint8_t tx_power;
+	uint8_t subslots;
+	uint8_t reserved;
+	uint16_t frag_payload;
+};
+
+static inline void dectcam_radio_cfg_pack(uint8_t out[DECTCAM_RADIO_CFG_LEN],
+					  const struct dectcam_radio_cfg *r)
+{
+	dectcam_put_u16(&out[0], r->carrier);
+	out[2] = r->mcs;
+	out[3] = r->tx_power;
+	out[4] = r->subslots;
+	out[5] = 0;
+	dectcam_put_u16(&out[6], r->frag_payload);
+}
+
+static inline void dectcam_radio_cfg_unpack(const uint8_t in[DECTCAM_RADIO_CFG_LEN],
+					    struct dectcam_radio_cfg *r)
+{
+	r->carrier = dectcam_get_u16(&in[0]);
+	r->mcs = in[2];
+	r->tx_power = in[3];
+	r->subslots = in[4];
+	r->reserved = in[5];
+	r->frag_payload = dectcam_get_u16(&in[6]);
+}
+
+/* Build a complete CTRL packet. Returns its length, or 0 on overflow. */
+static inline size_t dectcam_encode_ctrl(uint8_t *out, size_t out_cap, uint8_t opcode,
+					 uint8_t seq, uint32_t arg32)
+{
+	const struct dectcam_ctrl c = {
+		.opcode = opcode,
+		.seq = seq,
+		.arg32 = arg32,
+	};
+	uint8_t body[DECTCAM_CTRL_LEN];
+
+	dectcam_ctrl_pack(body, &c);
+	return dectcam_encode(out, out_cap, DECTCAM_TYPE_CTRL, 0, 0, 0, body, sizeof(body));
 }
 
 #ifdef __cplusplus

@@ -178,6 +178,21 @@ int uart_out_send(const uint8_t *data, size_t len)
 	s_stats.queued++;
 	s_stats.bytes += len;
 
+	/*
+	 * How full the ring actually gets, not how much has been through it.
+	 *
+	 * Whatever is standing here is latency: bytes the radio has already
+	 * delivered that the PC has not seen yet. At 40 kB/s a full 16 kB ring
+	 * is four tenths of a second of delay on every frame from then on, and
+	 * it does not drain on its own -- the PC reads at exactly the rate the
+	 * radio delivers, so a backlog once formed is permanent.
+	 */
+	const uint32_t used = ring_buf_size_get(&tx_ring);
+
+	if (used > s_stats.peak) {
+		s_stats.peak = used;
+	}
+
 	k_spin_unlock(&tx_lock, key);
 
 	k_sem_give(&data_ready);
@@ -227,4 +242,26 @@ void uart_out_get_stats(struct uart_out_stats *out)
 	if (out) {
 		*out = s_stats;
 	}
+}
+
+uint32_t uart_out_take_peak(void)
+{
+	/*
+	 * Read and clear, so the high water mark covers the interval between
+	 * calls rather than all of time. A single spike while the host was
+	 * still opening the port would otherwise latch it at the ring size for
+	 * good and hide what the ring is doing now, which is the part worth
+	 * knowing.
+	 *
+	 * Exactly one caller may use this -- the statistics packet. Clearing
+	 * it in uart_out_get_stats() instead would mean the console log and
+	 * the packet each stole half the samples from the other.
+	 */
+	k_spinlock_key_t key = k_spin_lock(&tx_lock);
+	const uint32_t v = s_stats.peak;
+
+	s_stats.peak = 0;
+	k_spin_unlock(&tx_lock, key);
+
+	return v;
 }

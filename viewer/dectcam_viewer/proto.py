@@ -48,7 +48,7 @@ TYPE_CTRL = 4
 TYPE_RADIO_CFG = 5
 
 META_LEN = 8
-STATS_LEN = 16
+STATS_LEN = 18
 CTRL_LEN = 6
 RADIO_CFG_LEN = 8
 
@@ -173,16 +173,27 @@ class Stats:
     pdc_crc_err: int
     frags_out: int
 
+    #: Deepest the receiver's outbound ring got since the last statistics
+    #: packet, in bytes. This is buffered delay: bytes received off the air
+    #: that the host has not been given yet. See ``ring_delay_s``.
+    ring_peak: int = 0
+
     @classmethod
     def unpack(cls, b: bytes) -> "Stats":
-        r, s, ok, err, out = struct.unpack("<hhIII", b[:STATS_LEN])
-        return cls(r, s, ok, err, out)
+        r, s, ok, err, out, peak = struct.unpack("<hhIIIH", b[:STATS_LEN])
+        return cls(r, s, ok, err, out, peak)
 
     def pack(self) -> bytes:
         return struct.pack(
-            "<hhIII", self.rssi_2, self.snr, self.pdc_ok,
-            self.pdc_crc_err, self.frags_out,
+            "<hhIIIH", self.rssi_2, self.snr, self.pdc_ok,
+            self.pdc_crc_err, self.frags_out, self.ring_peak,
         )
+
+    def ring_delay_s(self, byte_rate: float) -> Optional[float]:
+        """Seconds of delay the receiver's ring is contributing."""
+        if byte_rate <= 0:
+            return None
+        return self.ring_peak / byte_rate
 
     @property
     def rssi_dbm(self) -> Optional[float]:

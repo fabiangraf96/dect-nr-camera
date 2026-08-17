@@ -99,7 +99,17 @@ link quality.
    4      4    pdc_ok        PDC packets received with good CRC
    8      4    pdc_crc_err   PDC packets received with bad CRC
   12      4    frags_out     fragments forwarded to the PC
+   16      2    ring_peak     uint16, deepest the RX outbound ring got
+                              since the last STATS, in bytes
 ```
+
+Total 18 bytes. `ring_peak` is a high water mark over the interval, not a
+running total, and it is read-and-cleared by exactly one caller.
+
+It is here rather than in the receiver's log because both virtual COM ports sit
+on one J-Link: while video flows on VCOM1 the VCOM0 console is starved and says
+nothing, which is precisely when the number is wanted. Divided by the byte rate
+it gives the delay the receiver is contributing — see `docs/results.md`.
 
 `rssi_2` and `snr` are carried in **exactly** the representation
 `nrf_modem_dect_phy.h` reports them, so nothing is rounded on the way to the

@@ -72,7 +72,7 @@ extern "C" {
 
 /* Payload sizes of the fixed-layout types. */
 #define DECTCAM_META_LEN      8u
-#define DECTCAM_STATS_LEN     16u
+#define DECTCAM_STATS_LEN     18u
 #define DECTCAM_CTRL_LEN      6u
 #define DECTCAM_RADIO_CFG_LEN 8u
 
@@ -353,6 +353,20 @@ struct dectcam_stats {
 	uint32_t pdc_ok;
 	uint32_t pdc_crc_err;
 	uint32_t frags_out;
+
+	/*
+	 * Deepest the receiver's outbound ring got since the last statistics
+	 * packet, in bytes.
+	 *
+	 * This is the delay between something happening and the PC seeing it,
+	 * expressed as a queue: whatever stands here has been received off the
+	 * air but not yet handed to the host. Divide by the byte rate to get
+	 * seconds. It belongs in the packet rather than the log because the
+	 * two virtual COM ports share one USB device, and while video is
+	 * flowing on VCOM1 the console on VCOM0 is starved -- so the console
+	 * is silent at exactly the moment the number matters.
+	 */
+	uint16_t ring_peak;
 };
 
 static inline void dectcam_stats_pack(uint8_t out[DECTCAM_STATS_LEN],
@@ -363,6 +377,7 @@ static inline void dectcam_stats_pack(uint8_t out[DECTCAM_STATS_LEN],
 	dectcam_put_u32(&out[4], s->pdc_ok);
 	dectcam_put_u32(&out[8], s->pdc_crc_err);
 	dectcam_put_u32(&out[12], s->frags_out);
+	dectcam_put_u16(&out[16], s->ring_peak);
 }
 
 static inline void dectcam_stats_unpack(const uint8_t in[DECTCAM_STATS_LEN],
@@ -373,6 +388,7 @@ static inline void dectcam_stats_unpack(const uint8_t in[DECTCAM_STATS_LEN],
 	s->pdc_ok = dectcam_get_u32(&in[4]);
 	s->pdc_crc_err = dectcam_get_u32(&in[8]);
 	s->frags_out = dectcam_get_u32(&in[12]);
+	s->ring_peak = dectcam_get_u16(&in[16]);
 }
 
 /* ------------------------------------------------------------------ */

@@ -70,6 +70,11 @@ static void stream_task(void *arg)
 	int64_t last_meta_us = 0;
 	int64_t last_stats_us = 0;
 	uint32_t frames_since_stats = 0;
+
+	/* Delay the transmitter is responsible for: sensor to last fragment. */
+	int64_t age_sum_us = 0;
+	int64_t age_max_us = 0;
+	uint32_t age_n = 0;
 	uint64_t bytes_since_stats = 0;
 
 	for (;;) {
@@ -122,6 +127,21 @@ static void stream_task(void *arg)
 			frames_since_stats++;
 			bytes_since_stats += jlen;
 			frame_id++;
+
+#if !CONFIG_DECTCAM_TEST_PATTERN
+			/*
+			 * How stale the picture already is by the time its last
+			 * fragment is on the wire. Everything after this point
+			 * -- radio, receiver, PC -- adds to it.
+			 */
+			const int64_t age_us = esp_timer_get_time() - f.capture_us;
+
+			age_sum_us += age_us;
+			age_n++;
+			if (age_us > age_max_us) {
+				age_max_us = age_us;
+			}
+#endif
 		}
 
 #if !CONFIG_DECTCAM_TEST_PATTERN
@@ -135,12 +155,17 @@ static void stream_task(void *arg)
 		if (now - last_stats_us >= (int64_t)CONFIG_DECTCAM_STATS_INTERVAL_MS * 1000) {
 			const double secs = (double)(now - last_stats_us) / 1e6;
 
-			ESP_LOGI(TAG, "%.1f fps, %.1f kB/s, %ux%u q=%u, heap %lu",
+			ESP_LOGI(TAG,
+				 "%.1f fps, %.1f kB/s, %ux%u q=%u, age avg %lld ms max %lld ms, heap %lu",
 				 frames_since_stats / secs, bytes_since_stats / secs / 1000.0,
 				 dcam_width(), dcam_height(), dcam_quality(),
+				 age_n ? (age_sum_us / age_n / 1000) : 0LL, age_max_us / 1000,
 				 (unsigned long)esp_get_free_heap_size());
 			frames_since_stats = 0;
 			bytes_since_stats = 0;
+			age_sum_us = 0;
+			age_n = 0;
+			age_max_us = 0;
 			last_stats_us = now;
 		}
 #endif

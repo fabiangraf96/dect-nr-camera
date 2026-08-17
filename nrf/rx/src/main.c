@@ -102,6 +102,7 @@ static void send_stats_packet(void)
 		.pdc_ok = rs.pdc_ok,
 		.pdc_crc_err = rs.pdc_crc_err,
 		.frags_out = us.queued,
+		.ring_peak = (uint16_t)MIN(uart_out_take_peak(), UINT16_MAX),
 	};
 	uint8_t body[DECTCAM_STATS_LEN];
 	uint8_t pkt[DECTCAM_STATS_LEN + DECTCAM_OVERHEAD];
