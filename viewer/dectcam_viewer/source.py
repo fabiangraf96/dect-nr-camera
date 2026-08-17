@@ -38,6 +38,8 @@ class SerialSource:
         self._q: queue.Queue[bytes] = queue.Queue(maxsize=queue_max)
         self._stop = threading.Event()
         self._overruns = 0
+        self._errors = 0
+        self.last_error = ""
         self._t = threading.Thread(target=self._run, name="serial-rx", daemon=True)
         self._t.start()
 
@@ -45,8 +47,16 @@ class SerialSource:
         while not self._stop.is_set():
             try:
                 data = self._ser.read(4096)
-            except Exception:
-                break
+            except Exception as e:  # noqa: BLE001
+                # Do NOT give up here. This used to break out of the loop, so
+                # a single transient read error -- entirely possible on USB
+                # serial, and more so when the port is forwarded into WSL --
+                # ended the thread and the stream stopped for good, with no
+                # message and a window still showing the last frame.
+                self._errors += 1
+                self.last_error = repr(e)
+                time.sleep(0.05)
+                continue
             if not data:
                 continue
             try:
@@ -75,6 +85,14 @@ class SerialSource:
     @property
     def overruns(self) -> int:
         return self._overruns
+
+    @property
+    def errors(self) -> int:
+        return self._errors
+
+    @property
+    def alive(self) -> bool:
+        return self._t.is_alive()
 
     def close(self) -> None:
         self._stop.set()

@@ -76,8 +76,13 @@ class Reader(threading.Thread):
         self.lock = threading.Lock()
         self.frame: Optional[np.ndarray] = None
         self.frame_at: float = 0.0
+        # Bumped on every new frame, so the window can skip redrawing when
+        # nothing has changed.
+        self.frame_seq = 0
         self.n_frames = 0
         self.running = True
+        self.errors = 0
+        self.last_error = ""
         self._t0 = time.monotonic()
         self._bytes = 0
         self.kbps = 0.0
@@ -85,25 +90,43 @@ class Reader(threading.Thread):
         self._fps_count = 0
 
     def run(self) -> None:
+        """Read, decode, reassemble.
+
+        Wrapped in a catch-all on purpose. This loop used to be bare, so any
+        single malformed packet that upset the decoder would kill the thread
+        outright -- and because the window carries on drawing the last frame it
+        received, the only visible symptom was that the picture froze and the
+        frame counter stopped. One bad packet must not end the session.
+        """
         while self.running:
-            data = self.source.read(timeout=0.05)
-            if not data:
-                self._rates()
-                continue
-            self._bytes += len(data)
-            for pkt in self.dec.feed(data):
-                self.ctrl.on_packet(pkt)
-                for frame in self.rea.push(pkt):
-                    img = cv2.imdecode(np.frombuffer(frame.jpeg, np.uint8),
-                                       cv2.IMREAD_COLOR)
-                    if img is None:
-                        continue
-                    with self.lock:
-                        self.frame = img
-                        self.frame_at = time.monotonic()
-                        self.n_frames += 1
-                        self._fps_count += 1
+            try:
+                self._pump()
+            except Exception as e:  # noqa: BLE001
+                self.errors += 1
+                self.last_error = repr(e)
+                time.sleep(0.02)
+
+    def _pump(self) -> None:
+        data = self.source.read(timeout=0.05)
+        if not data:
             self._rates()
+            return
+
+        self._bytes += len(data)
+        for pkt in self.dec.feed(data):
+            self.ctrl.on_packet(pkt)
+            for frame in self.rea.push(pkt):
+                img = cv2.imdecode(np.frombuffer(frame.jpeg, np.uint8),
+                                   cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+                with self.lock:
+                    self.frame = img
+                    self.frame_at = time.monotonic()
+                    self.frame_seq += 1
+                    self.n_frames += 1
+                    self._fps_count += 1
+        self._rates()
 
     def _rates(self) -> None:
         now = time.monotonic()
@@ -124,6 +147,9 @@ class Panel:
         self.ctrl = ctrl
         self.scale = scale
         self._photo: Optional[ImageTk.PhotoImage] = None
+        self._last_seq = -1
+        self._last_stale = -1
+        self._last_labels = 0.0
 
         root.title("DECT NR+ camera")
         root.columnconfigure(0, weight=1)
@@ -201,6 +227,11 @@ class Panel:
         self.l_quality.pack(anchor="w")
         self.l_frames = ttk.Label(f, text="-")
         self.l_frames.pack(anchor="w")
+        # Anything that would otherwise make the picture stop with no
+        # explanation: a dead reader, serial errors, or the host falling behind.
+        self.l_health = ttk.Label(f, text="", foreground="#a00", wraplength=200,
+                                  justify="left")
+        self.l_health.pack(anchor="w")
         self.l_result = ttk.Label(f, text="", foreground="#046", wraplength=200,
                                   justify="left")
         self.l_result.pack(anchor="w", pady=(6, 0))
@@ -237,22 +268,53 @@ class Panel:
     def tick(self) -> None:
         self.ctrl.tick()
         self._draw_frame()
-        self._update_labels()
+
+        # The text only has to keep up with a reader, not with the video.
+        # Rewriting seven labels 25 times a second is work Tk does not need to
+        # do, and it competes with the redraw for the same thread.
+        now = time.monotonic()
+        if now - self._last_labels >= 0.25:
+            self._last_labels = now
+            self._update_labels()
+
         self.root.after(40, self.tick)
 
     def _draw_frame(self) -> None:
         with self.reader.lock:
-            img = None if self.reader.frame is None else self.reader.frame.copy()
+            img = self.reader.frame
+            seq = self.reader.frame_seq
             age = time.monotonic() - self.reader.frame_at if self.reader.frame_at else 1e9
 
         if img is None:
             return
 
+        # Redraw only when there is something new, or when the picture has just
+        # gone stale and needs the overlay put on it.
+        #
+        # This used to redraw on every tick regardless. At 25 ticks a second
+        # against 14 frames, nearly half the work was spent rebuilding an
+        # identical image -- a full-size copy, a resize, a colour conversion and
+        # a fresh Tk image object each time. Under motion, when frames are
+        # larger and the decoder has more to do, that was enough to make the
+        # window fall behind and appear to seize up.
+        stale = age >= STALE_AFTER_S
+        # While stale, the overlay counts the seconds, so allow one redraw per
+        # second even though the picture underneath is unchanged.
+        stale_key = int(age) if stale else -1
+        if seq == self._last_seq and stale_key == self._last_stale:
+            return
+        self._last_seq = seq
+        self._last_stale = stale_key
+
+        # No copy: the reader never mutates a frame once it has published it,
+        # it only ever replaces the reference.
         if self.scale != 1.0:
             img = cv2.resize(img, None, fx=self.scale, fy=self.scale,
                              interpolation=cv2.INTER_NEAREST)
+        elif stale:
+            img = img.copy()  # about to be drawn on
 
-        if age >= STALE_AFTER_S:
+        if stale:
             # A frozen picture is indistinguishable from a very still scene.
             img = (img * 0.35).astype(np.uint8)
             h, w = img.shape[:2]
@@ -279,6 +341,8 @@ class Panel:
             self.l_quality.config(text=f"rssi {st.rssi_dbm:.1f} dBm   "
                                        f"snr {st.snr_db:.2f} dB")
 
+        self.l_health.config(text=self._health())
+
         # Reflect what the far end reports, but never fight the operator: only
         # fill a dropdown that is not currently being changed.
         cfg = self.ctrl.radio
@@ -299,6 +363,30 @@ class Panel:
             self._sync(self.v_q, meta.jpeg_quality)
 
         self.l_result.config(text=self.ctrl.last_result)
+
+    def _health(self) -> str:
+        """Anything that would otherwise stop the picture without saying why."""
+        notes = []
+        r = self.reader
+
+        if not r.is_alive():
+            notes.append("decoder thread has stopped")
+        if r.errors:
+            notes.append(f"{r.errors} decode errors ({r.last_error[:60]})")
+
+        src = r.source
+        if getattr(src, "alive", True) is False:
+            notes.append("serial thread has stopped")
+        if getattr(src, "errors", 0):
+            notes.append(f"{src.errors} serial errors ({src.last_error[:60]})")
+        if getattr(src, "overruns", 0):
+            notes.append(f"{src.overruns} host overruns: not keeping up")
+
+        d = r.dec
+        if d.n_crc_err:
+            notes.append(f"{d.n_crc_err} packet CRC errors")
+
+        return "\n".join(notes)
 
     @staticmethod
     def _sync(var: tk.StringVar, value) -> None:
