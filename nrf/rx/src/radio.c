@@ -206,18 +206,9 @@ int radio_stop_rx(void)
 	return 0;
 }
 
-int radio_send_ctrl(const uint8_t *data, size_t len)
+/* One transmission. The caller owns stopping and restarting reception. */
+static int tx_once(const uint8_t *data, size_t len)
 {
-	if (len == 0 || len > (size_t)DECTCAM_TBS_BYTES) {
-		return -EINVAL;
-	}
-
-	const bool was_receiving = s_rx_wanted;
-
-	if (was_receiving) {
-		radio_stop_rx();
-	}
-
 	struct dectcam_phy_hdr_type1 hdr = {
 		.header_format = 0,
 		.packet_length_type = 0,
@@ -257,15 +248,45 @@ int radio_send_ctrl(const uint8_t *data, size_t len)
 
 	if (err) {
 		s_stats.ctrl_tx_err++;
-		LOG_WRN("control transmit failed: %d", err);
 	} else {
 		s_stats.ctrl_tx++;
+	}
+	return err;
+}
+
+int radio_send_ctrl_burst(const uint8_t *data, size_t len, int count, uint32_t gap_ms)
+{
+	if (len == 0 || len > (size_t)DECTCAM_TBS_BYTES || count <= 0) {
+		return -EINVAL;
+	}
+
+	const bool was_receiving = s_rx_wanted;
+
+	if (was_receiving && radio_stop_rx() != 0) {
+		LOG_WRN("could not stop reception; not transmitting");
+		return -EBUSY;
+	}
+
+	int sent = 0;
+
+	for (int i = 0; i < count; i++) {
+		if (tx_once(data, len) == 0) {
+			sent++;
+		}
+		if (i + 1 < count && gap_ms) {
+			k_msleep(gap_ms);
+		}
 	}
 
 	if (was_receiving) {
 		radio_start_rx();
 	}
-	return err;
+
+	if (sent == 0) {
+		LOG_WRN("control burst: nothing got out");
+		return -EIO;
+	}
+	return 0;
 }
 
 int radio_set_carrier(uint16_t carrier)

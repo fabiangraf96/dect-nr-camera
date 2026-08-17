@@ -60,11 +60,21 @@ extern "C" {
 #define DECTCAM_TYPE_FRAME_META 2u
 #define DECTCAM_TYPE_STATS      3u
 #define DECTCAM_TYPE_CTRL       4u
+/*
+ * What the transmitter's radio is currently set to.
+ *
+ * Announced periodically for the same reason FRAME_META is: the operator can
+ * change these at run time, and a viewer that attaches later has no other way
+ * to learn where the link ended up. It also closes the loop on a command --
+ * the acknowledgement says "applied", this says what it was applied to.
+ */
+#define DECTCAM_TYPE_RADIO_CFG  5u
 
 /* Payload sizes of the fixed-layout types. */
-#define DECTCAM_META_LEN  8u
-#define DECTCAM_STATS_LEN 16u
-#define DECTCAM_CTRL_LEN  6u
+#define DECTCAM_META_LEN      8u
+#define DECTCAM_STATS_LEN     16u
+#define DECTCAM_CTRL_LEN      6u
+#define DECTCAM_RADIO_CFG_LEN 8u
 
 /*
  * Control opcodes, carried in a DECTCAM_TYPE_CTRL packet.
@@ -402,6 +412,41 @@ static inline void dectcam_ctrl_unpack(const uint8_t in[DECTCAM_CTRL_LEN],
 	c->opcode = in[0];
 	c->seq = in[1];
 	c->arg32 = dectcam_get_u32(&in[2]);
+}
+
+/* ------------------------------------------------------------------ */
+/* RADIO_CFG payload helpers                                          */
+/* ------------------------------------------------------------------ */
+
+struct dectcam_radio_cfg {
+	uint16_t carrier;
+	uint8_t mcs;
+	uint8_t tx_power;
+	uint8_t subslots;
+	uint8_t reserved;
+	uint16_t frag_payload;
+};
+
+static inline void dectcam_radio_cfg_pack(uint8_t out[DECTCAM_RADIO_CFG_LEN],
+					  const struct dectcam_radio_cfg *r)
+{
+	dectcam_put_u16(&out[0], r->carrier);
+	out[2] = r->mcs;
+	out[3] = r->tx_power;
+	out[4] = r->subslots;
+	out[5] = 0;
+	dectcam_put_u16(&out[6], r->frag_payload);
+}
+
+static inline void dectcam_radio_cfg_unpack(const uint8_t in[DECTCAM_RADIO_CFG_LEN],
+					    struct dectcam_radio_cfg *r)
+{
+	r->carrier = dectcam_get_u16(&in[0]);
+	r->mcs = in[2];
+	r->tx_power = in[3];
+	r->subslots = in[4];
+	r->reserved = in[5];
+	r->frag_payload = dectcam_get_u16(&in[6]);
 }
 
 /* Build a complete CTRL packet. Returns its length, or 0 on overflow. */

@@ -28,6 +28,18 @@ struct uart_in_stats {
 	uint64_t bytes;
 };
 
+/*
+ * Send one newline-terminated line to the camera on the same UART.
+ *
+ * Lives here rather than in camctl.c because this module owns the device and
+ * its callback, and the transmit has to use the async API: mixing
+ * uart_poll_out() with an active uart_rx_enable() on the nRF UARTE drops
+ * characters.
+ *
+ * Blocks until the line is on the wire. Returns 0, or a negative errno.
+ */
+int uart_in_send_line(const char *line);
+
 void uart_in_get_stats(struct uart_in_stats *out);
 
 #endif /* DECTCAM_UART_IN_H */

@@ -49,9 +49,21 @@ static K_SEM_DEFINE(tx_done, 1, 1);
 static K_SEM_DEFINE(data_ready, 0, 1);
 static struct uart_out_stats s_stats;
 
+/*
+ * Reception from the host.
+ *
+ * This port was write-only for most of the project's life -- it exists to push
+ * video at the PC -- but it is an ordinary full-duplex UART, so control from
+ * the operator can come back along it without another cable. The traffic is a
+ * few bytes at a time and rare, so two small DMA buffers are plenty.
+ */
+#define RX_BUF_SZ 64
+static uint8_t rx_buf[2][RX_BUF_SZ];
+static int rx_next;
+static uart_out_rx_cb_t s_rx_cb;
+
 static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
 {
-	ARG_UNUSED(dev);
 	ARG_UNUSED(user_data);
 
 	switch (evt->type) {
@@ -59,6 +71,23 @@ static void uart_cb(const struct device *dev, struct uart_event *evt, void *user
 	case UART_TX_ABORTED:
 		k_sem_give(&tx_done);
 		break;
+
+	case UART_RX_RDY:
+		if (s_rx_cb) {
+			s_rx_cb(&evt->data.rx.buf[evt->data.rx.offset], evt->data.rx.len);
+		}
+		break;
+	case UART_RX_BUF_REQUEST:
+		uart_rx_buf_rsp(dev, rx_buf[rx_next], RX_BUF_SZ);
+		rx_next ^= 1;
+		break;
+	case UART_RX_DISABLED:
+		/* Should not happen while running; restart so a transient
+		 * error does not quietly remove the control path. */
+		LOG_WRN("host RX disabled, restarting");
+		uart_rx_enable(dev, rx_buf[0], RX_BUF_SZ, 2000);
+		break;
+
 	default:
 		break;
 	}
@@ -78,9 +107,25 @@ int uart_out_init(void)
 		return err;
 	}
 
-	LOG_INF("uart2 TX up @ %d baud (VCOM1), %d B ring", CONFIG_DECTCAM_RX_UART_BAUD,
-		CONFIG_DECTCAM_RX_RING_SIZE);
+	/*
+	 * A 2 ms idle timeout flushes a partially filled buffer, so a short
+	 * command does not sit waiting for 64 bytes that will never come.
+	 */
+	err = uart_rx_enable(uart_dev, rx_buf[0], RX_BUF_SZ, 2000);
+	if (err) {
+		LOG_ERR("uart_rx_enable failed: %d", err);
+		return err;
+	}
+	rx_next = 1;
+
+	LOG_INF("uart2 up @ %d baud (VCOM1), %d B ring, control accepted from the host",
+		CONFIG_DECTCAM_RX_UART_BAUD, CONFIG_DECTCAM_RX_RING_SIZE);
 	return 0;
+}
+
+void uart_out_set_rx_cb(uart_out_rx_cb_t cb)
+{
+	s_rx_cb = cb;
 }
 
 int uart_out_send(const uint8_t *data, size_t len)

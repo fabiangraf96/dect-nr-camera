@@ -26,28 +26,86 @@
 
 #include "radio.h"
 #include "uart_in.h"
+#include "camctl.h"
 
 LOG_MODULE_DECLARE(dectcam_tx, CONFIG_DECTCAM_LOG_LEVEL);
 
-static const struct device *const cam_uart = DEVICE_DT_GET(DT_NODELABEL(uart2));
+/*
+ * The camera's resolution table, in the order the wire protocol indexes it.
+ * Must match s_sizes[] in the camera firmware and RESOLUTIONS in the viewer;
+ * the protocol self-tests pin the order down on both of those.
+ */
+static const char *const res_names[] = {
+	"qqvga", "qcif", "hqvga", "qvga", "cif", "hvga", "vga", "svga",
+};
+
+const char *camctl_res_name(uint8_t index)
+{
+	if (index >= ARRAY_SIZE(res_names)) {
+		return NULL;
+	}
+	return res_names[index];
+}
+
+/*
+ * Put one line on the wire.
+ *
+ * Delegated to uart_in, which owns the device and its callback. This used to
+ * use uart_poll_out() directly, on the reasoning that a dozen bytes at 1 Mbaud
+ * is too short to be worth DMA. That was wrong for a subtler reason: the
+ * receive side holds the UART open with the async API, and poll_out alongside
+ * it loses characters. "cam fps 15" reached the camera as "cam fps 1".
+ */
+static int write_line(const char *line)
+{
+	return uart_in_send_line(line);
+}
 
 static int send_line(const struct shell *sh, const char *line)
 {
-	if (!device_is_ready(cam_uart)) {
-		shell_error(sh, "uart2 not ready");
-		return -ENODEV;
-	}
+	int err = write_line(line);
 
-	/*
-	 * Polled output on purpose. The async API owns the RX side here, and a
-	 * handful of bytes at 1 Mbaud takes microseconds, so there is nothing
-	 * to gain from DMA and one less interaction to reason about.
-	 */
-	for (const char *p = line; *p; p++) {
-		uart_poll_out(cam_uart, *p);
+	if (err == -ENODEV) {
+		shell_error(sh, "uart2 not ready");
 	}
-	uart_poll_out(cam_uart, '\n');
-	return 0;
+	return err;
+}
+
+int camctl_send_res(uint8_t index)
+{
+	const char *name = camctl_res_name(index);
+	char line[32];
+
+	if (name == NULL) {
+		return -EINVAL;
+	}
+	snprintk(line, sizeof(line), "cam res %s", name);
+	LOG_INF("camera: %s", line);
+	return write_line(line);
+}
+
+int camctl_send_fps(uint8_t fps)
+{
+	char line[32];
+
+	if (fps < 1 || fps > 30) {
+		return -EINVAL;
+	}
+	snprintk(line, sizeof(line), "cam fps %u", fps);
+	LOG_INF("camera: %s", line);
+	return write_line(line);
+}
+
+int camctl_send_quality(uint8_t q)
+{
+	char line[32];
+
+	if (q < 4 || q > 63) {
+		return -EINVAL;
+	}
+	snprintk(line, sizeof(line), "cam quality %u", q);
+	LOG_INF("camera: %s", line);
+	return write_line(line);
 }
 
 static int cmd_cam(const struct shell *sh, size_t argc, char **argv)

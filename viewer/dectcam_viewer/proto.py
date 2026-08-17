@@ -42,10 +42,15 @@ TYPE_JPEG_FRAG = 1
 TYPE_FRAME_META = 2
 TYPE_STATS = 3
 TYPE_CTRL = 4
+# What the transmitter's radio is currently set to. Announced periodically,
+# because these are changeable at run time and a viewer that attaches later
+# has no other way to learn where the link ended up.
+TYPE_RADIO_CFG = 5
 
 META_LEN = 8
 STATS_LEN = 16
 CTRL_LEN = 6
+RADIO_CFG_LEN = 8
 
 MAX_PAYLOAD = 1024
 MAX_PACKET = MAX_PAYLOAD + OVERHEAD
@@ -213,6 +218,33 @@ class Ctrl:
 
     def pack(self) -> bytes:
         return struct.pack("<BBI", self.opcode, self.seq, self.arg32)
+
+
+@dataclass
+class RadioCfg:
+    """What the transmitter's radio is currently set to."""
+
+    carrier: int
+    mcs: int
+    tx_power: int
+    subslots: int
+    frag_payload: int
+
+    @classmethod
+    def unpack(cls, b: bytes) -> "RadioCfg":
+        car, mcs, pwr, sub, _res, frag = struct.unpack("<HBBBBH", b[:RADIO_CFG_LEN])
+        return cls(car, mcs, pwr, sub, frag)
+
+    def pack(self) -> bytes:
+        return struct.pack(
+            "<HBBBBH", self.carrier, self.mcs, self.tx_power,
+            self.subslots, 0, self.frag_payload,
+        )
+
+    @property
+    def mhz(self) -> float:
+        """Centre frequency for a band 1 carrier number."""
+        return 1881.792 + (self.carrier - 1657) * 0.864
 
 
 def encode_ctrl(opcode: int, seq: int, arg32: int) -> bytes:

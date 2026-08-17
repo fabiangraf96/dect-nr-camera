@@ -1,7 +1,11 @@
 /*
- * uart_out.h - buffered UART transmission to the PC over VCOM1.
+ * uart_out.h - the link to the PC over VCOM1.
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Mostly outbound -- it exists to push video at the host -- but the same
+ * full-duplex UART carries the operator's control packets the other way, so
+ * steering the link needs no second cable.
  */
 
 #ifndef DECTCAM_UART_OUT_H
@@ -11,6 +15,13 @@
 #include <stddef.h>
 
 int uart_out_init(void);
+
+/*
+ * Called from the UART callback for every chunk the host sends. Runs in
+ * interrupt context: keep it short.
+ */
+typedef void (*uart_out_rx_cb_t)(const uint8_t *data, size_t len);
+void uart_out_set_rx_cb(uart_out_rx_cb_t cb);
 
 /*
  * Queue a blob for transmission. Safe to call from an ISR / modem callback:

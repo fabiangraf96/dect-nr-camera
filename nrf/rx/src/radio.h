@@ -25,14 +25,18 @@ int radio_start_rx(void);
 int radio_stop_rx(void);
 
 /*
- * Send one control telegram.
+ * Send the same control telegram `count` times, `gap_ms` apart.
  *
- * The receiver is otherwise a listener; this exists so the PC can steer the
- * far end. Reception is stopped for the duration and restarted afterwards,
- * which costs a few milliseconds of video -- acceptable for something the
- * operator triggers by hand, and unavoidable with one radio.
+ * The far end listens only in short windows between video bursts, so a single
+ * copy would usually be missed. Reception is stopped once for the whole burst
+ * rather than once per copy: tearing it down and building it back up again for
+ * every repeat cost more time than the transmissions themselves and left the
+ * video badly disrupted.
+ *
+ * Video is not received for the duration of the burst. That is the price of
+ * having one radio, and it is only paid when the operator changes something.
  */
-int radio_send_ctrl(const uint8_t *data, size_t len);
+int radio_send_ctrl_burst(const uint8_t *data, size_t len, int count, uint32_t gap_ms);
 
 /* Retune the receiver. The far end must be moved separately and first. */
 int radio_set_carrier(uint16_t carrier);

@@ -17,6 +17,7 @@
 
 #include "radio.h"
 #include "uart_in.h"
+#include "ctrl.h"
 #include "dectcam_cfg.h"
 
 LOG_MODULE_REGISTER(dectcam_tx, CONFIG_DECTCAM_LOG_LEVEL);
@@ -84,6 +85,7 @@ int main(void)
 		LOG_ERR("radio init failed; halting");
 		return -EIO;
 	}
+	radio_set_ctrl_cb(ctrl_on_packet);
 	gpio_pin_set_dt(&led_up, 1);
 
 #if !CONFIG_DECTCAM_TX_TEST_PATTERN
@@ -119,6 +121,62 @@ int main(void)
 			k_msleep(period_ms - spent);
 		}
 #else
+		/*
+		 * Listen for control before touching the radio for video, so
+		 * the receive window never lands in the middle of a burst.
+		 */
+		ctrl_poll();
+
+		/*
+		 * Slip any pending acknowledgement into the stream. It is an
+		 * ordinary packet as far as everything downstream is
+		 * concerned, and it rides the direction that already works.
+		 */
+		{
+			uint8_t ack[DECTCAM_CTRL_LEN + DECTCAM_OVERHEAD];
+			const size_t n = ctrl_pending_ack(ack, sizeof(ack));
+
+			if (n > 0) {
+				radio_tx(ack, n);
+			}
+		}
+
+		/*
+		 * Announce the radio settings once a second, for the same
+		 * reason the camera announces its own: they change at run time
+		 * now, and a viewer that attaches later has no other way to
+		 * learn where the link ended up.
+		 */
+		{
+			static int64_t last_cfg;
+			const int64_t t = k_uptime_get();
+
+			if (t - last_cfg >= 1000) {
+				struct radio_cfg rc;
+				struct dectcam_radio_cfg body;
+				uint8_t buf[DECTCAM_RADIO_CFG_LEN + DECTCAM_OVERHEAD];
+				uint8_t packed[DECTCAM_RADIO_CFG_LEN];
+
+				last_cfg = t;
+				radio_get_cfg(&rc);
+				body.carrier = rc.carrier;
+				body.mcs = rc.mcs;
+				body.tx_power = rc.tx_power;
+				body.subslots = rc.subslots;
+				body.reserved = 0;
+				body.frag_payload = rc.frag_payload;
+				dectcam_radio_cfg_pack(packed, &body);
+
+				const size_t n = dectcam_encode(
+					buf, sizeof(buf), DECTCAM_TYPE_RADIO_CFG, 0, 0, 0,
+					packed, sizeof(packed));
+
+				if (n > 0) {
+					radio_tx(buf, n);
+				}
+			}
+		}
+
 		int len = uart_in_get_packet(pkt_buf, sizeof(pkt_buf), 100);
 
 		if (len > 0) {

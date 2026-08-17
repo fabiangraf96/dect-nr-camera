@@ -17,6 +17,7 @@
 
 #include "radio.h"
 #include "uart_out.h"
+#include "ctrl.h"
 #include "dectcam_cfg.h"
 
 LOG_MODULE_REGISTER(dectcam_rx, CONFIG_DECTCAM_LOG_LEVEL);
@@ -55,6 +56,16 @@ static void on_pdc(const uint8_t *data, size_t len)
 	if (plen > DECTCAM_MAX_PAYLOAD || total > len) {
 		s_malformed++;
 		return;
+	}
+
+	/*
+	 * Acknowledgements ride the video stream, because that direction
+	 * already works. Let the control logic see them on the way past; they
+	 * are forwarded to the host as well, so the viewer can report what
+	 * happened.
+	 */
+	if (data[DECTCAM_OFF_VERTYPE] % 16 == DECTCAM_TYPE_CTRL) {
+		ctrl_on_air_packet(data, total);
 	}
 
 	if (uart_out_send(data, total) == 0) {
@@ -112,10 +123,13 @@ int main(void)
 
 	leds_init();
 
+	ctrl_init();
+
 	if (uart_out_init() != 0) {
 		LOG_ERR("uart init failed; halting");
 		return -EIO;
 	}
+	uart_out_set_rx_cb(ctrl_feed_host);
 
 	if (radio_init(on_pdc) != 0) {
 		LOG_ERR("radio init failed; halting");
@@ -144,7 +158,14 @@ int main(void)
 	}
 
 	for (;;) {
-		k_msleep(100);
+		/*
+		 * 20 ms rather than 100: control telegrams are repeated from
+		 * here, and the transmitter's listen window is only 20 ms wide
+		 * every 250 ms, so a slower loop would miss most of them.
+		 */
+		k_msleep(20);
+
+		ctrl_poll();
 
 		const int64_t now = k_uptime_get();
 

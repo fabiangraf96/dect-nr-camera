@@ -112,6 +112,13 @@ def main() -> int:
     check(len(proto.RESOLUTIONS) == 8, "eight resolutions")
     print(f"  resolution table: {len(proto.RESOLUTIONS)} entries, index 3 = qvga")
 
+    rc = proto.RadioCfg(carrier=1665, mcs=4, tx_power=13, subslots=8, frag_payload=687)
+    check(proto.RadioCfg.unpack(rc.pack()) == rc, "radio cfg roundtrip")
+    check(len(rc.pack()) == proto.RADIO_CFG_LEN, "radio cfg length")
+    # 1665 is the project default and should land on 1888.704 MHz.
+    check(abs(rc.mhz - 1888.704) < 1e-6, f"carrier 1665 -> {rc.mhz} MHz")
+    print(f"  radio cfg: carrier {rc.carrier} = {rc.mhz:.3f} MHz")
+
     print("\n" + ("FAILED" if failures else "ALL PASS") + f" ({failures} failures)")
     return 1 if failures else 0
 

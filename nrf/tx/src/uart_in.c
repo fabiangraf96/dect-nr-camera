@@ -46,11 +46,27 @@ RING_BUF_DECLARE(rx_ring, CONFIG_DECTCAM_TX_RING_SIZE);
 static K_SEM_DEFINE(data_sem, 0, 1);
 static struct uart_in_stats s_stats;
 
+/*
+ * Completion of an outgoing line.
+ *
+ * The back-channel to the camera shares this UART, and it has to use the same
+ * async API the receive side uses. Mixing uart_poll_out() with an active
+ * uart_rx_enable() on the nRF UARTE loses bytes: "cam fps 15" arrived at the
+ * camera as "cam fps 1", which it obeyed. The last character before the
+ * newline was the one that went missing, every time.
+ */
+static K_SEM_DEFINE(tx_done, 1, 1);
+
 static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
 {
 	ARG_UNUSED(user_data);
 
 	switch (evt->type) {
+	case UART_TX_DONE:
+	case UART_TX_ABORTED:
+		k_sem_give(&tx_done);
+		break;
+
 	case UART_RX_RDY: {
 		const uint8_t *p = &evt->data.rx.buf[evt->data.rx.offset];
 		const uint32_t n = evt->data.rx.len;
@@ -193,6 +209,45 @@ int uart_in_get_packet(uint8_t *out, size_t cap, int timeout_ms)
 		}
 		k_sem_take(&data_sem, K_MSEC(MIN(left, 20)));
 	}
+}
+
+int uart_in_send_line(const char *line)
+{
+	static uint8_t out[96];
+	size_t n = 0;
+
+	if (!device_is_ready(uart_dev)) {
+		return -ENODEV;
+	}
+
+	while (line[n] != '\0' && n < sizeof(out) - 1) {
+		out[n] = (uint8_t)line[n];
+		n++;
+	}
+	out[n++] = '\n';
+
+	/* Wait for any previous line to finish before reusing the buffer. */
+	if (k_sem_take(&tx_done, K_MSEC(200)) != 0) {
+		return -EBUSY;
+	}
+
+	const int err = uart_tx(uart_dev, out, n, SYS_FOREVER_US);
+
+	if (err) {
+		k_sem_give(&tx_done);
+		return err;
+	}
+
+	/*
+	 * Block until it is on the wire. The caller is the control path, which
+	 * runs at human speed, and returning early would let the next line
+	 * overwrite this one mid-transmission.
+	 */
+	if (k_sem_take(&tx_done, K_MSEC(200)) != 0) {
+		return -ETIMEDOUT;
+	}
+	k_sem_give(&tx_done);
+	return 0;
 }
 
 void uart_in_get_stats(struct uart_in_stats *out)

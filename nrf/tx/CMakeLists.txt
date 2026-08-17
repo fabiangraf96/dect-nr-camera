@@ -9,6 +9,7 @@ target_sources(app PRIVATE
     src/radio.c
     src/uart_in.c
     src/camctl.c
+    src/ctrl.c
 )
 
 # Shared protocol / config headers live one level up, outside this app.
