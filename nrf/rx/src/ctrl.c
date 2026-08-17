@@ -115,17 +115,50 @@ static void start(uint8_t opcode, uint8_t seq, uint32_t arg)
 /*
  * Begin a carrier change.
  *
- * The order matters. The new carrier is announced on the OLD one, where the
- * far end is still listening; only once that has been acknowledged does this
- * end retune. If the far end never arrives on the new carrier, both sides give
- * up and return -- see the deadline above.
+ * Unlike every other command, this one does NOT wait for an acknowledgement
+ * before acting -- it cannot. The far end applies the new carrier the moment
+ * it hears the telegram and starts transmitting there, including its
+ * acknowledgement. This end is still on the old carrier and so never hears it.
+ * Waiting for one leaves the two ends on different channels with no way to
+ * reach each other, which is exactly what happened the first time this was
+ * tried: the link went dead and only a reset brought it back.
+ *
+ * So both ends move on their own clocks instead. This one announces the change
+ * for the length of one burst, then retunes regardless. Each side then watches
+ * for traffic and returns to the old carrier on its own if none appears -- this
+ * end first, so the two converge on the old channel rather than crossing over.
  */
 static void begin_carrier_change(uint8_t seq, uint16_t carrier)
 {
 	s_carrier_previous = radio_carrier();
 	s_carrier_target = carrier;
-	start(DECTCAM_CTRL_SET_CARRIER, seq, carrier);
-	LOG_WRN("moving carrier %u -> %u", s_carrier_previous, carrier);
+
+	LOG_WRN("announcing carrier %u -> %u", s_carrier_previous, carrier);
+
+	uint8_t pkt[DECTCAM_CTRL_LEN + DECTCAM_OVERHEAD];
+	const size_t n = dectcam_encode_ctrl(pkt, sizeof(pkt), DECTCAM_CTRL_SET_CARRIER,
+					     seq, carrier);
+
+	if (n == 0) {
+		return;
+	}
+
+	/* One burst on the old carrier: five of the far end's listen windows. */
+	radio_send_ctrl_burst(pkt, n, BURST_COUNT, BURST_GAP_MS);
+	s_stats.sent++;
+
+	/* Now follow it, and start the clock. */
+	struct radio_stats rs;
+
+	radio_get_stats(&rs);
+	s_pdc_at_switch = rs.pdc_ok;
+	s_carrier_trial = true;
+	s_carrier_deadline = k_uptime_get() + CARRIER_TRIAL_MS;
+	s_stats.carrier_moves++;
+
+	radio_set_carrier(carrier);
+	LOG_WRN("now on %u; returning to %u in %d ms unless video appears", carrier,
+		s_carrier_previous, CARRIER_TRIAL_MS);
 }
 
 void ctrl_init(void)
@@ -133,19 +166,48 @@ void ctrl_init(void)
 	s_host_len = 0;
 }
 
+/*
+ * Command from the host, waiting to be acted on.
+ *
+ * ctrl_feed_host() runs in the UART interrupt. Acting on a command there is
+ * not merely impolite, it is fatal: a carrier change transmits a burst, and
+ * the burst sleeps between copies. k_msleep() from an interrupt takes the
+ * board down, which is precisely what happened -- the receiver went silent and
+ * only a reset brought it back, while the transmitter carried on happily
+ * announcing itself on a carrier nobody was listening to.
+ *
+ * So the interrupt parks the command and the main loop runs it.
+ */
+static volatile bool s_inbox_full;
+static struct dectcam_ctrl s_inbox;
+
 static void handle_from_host(const struct dectcam_ctrl *c)
 {
 	s_stats.from_host++;
 
-	if (s_busy) {
+	if (s_busy || s_inbox_full) {
 		LOG_WRN("a command is already in flight; ignoring opcode %u", c->opcode);
 		return;
 	}
 
-	if (c->opcode == DECTCAM_CTRL_SET_CARRIER) {
-		begin_carrier_change(c->seq, (uint16_t)c->arg32);
+	s_inbox = *c;
+	s_inbox_full = true;
+}
+
+static void process_inbox(void)
+{
+	if (!s_inbox_full) {
+		return;
+	}
+
+	const struct dectcam_ctrl c = s_inbox;
+
+	s_inbox_full = false;
+
+	if (c.opcode == DECTCAM_CTRL_SET_CARRIER) {
+		begin_carrier_change(c.seq, (uint16_t)c.arg32);
 	} else {
-		start(c->opcode, c->seq, c->arg32);
+		start(c.opcode, c.seq, c.arg32);
 	}
 }
 
@@ -214,30 +276,14 @@ void ctrl_on_air_packet(const uint8_t *data, size_t len)
 	if (c.arg32 != DECTCAM_ACK_OK) {
 		LOG_WRN("far end rejected opcode %u (status %u)", s_opcode,
 			(unsigned)c.arg32);
-		return;
-	}
-
-	/*
-	 * The far end has taken the new carrier. Follow it, and start the
-	 * clock: if no video appears there, both ends go back.
-	 */
-	if (s_opcode == DECTCAM_CTRL_SET_CARRIER) {
-		struct radio_stats rs;
-
-		radio_get_stats(&rs);
-		s_pdc_at_switch = rs.pdc_ok;
-		s_carrier_trial = true;
-		s_carrier_deadline = k_uptime_get() + CARRIER_TRIAL_MS;
-		s_stats.carrier_moves++;
-		radio_set_carrier(s_carrier_target);
-		LOG_WRN("now listening on %u; returning to %u in %d ms unless video appears",
-			s_carrier_target, s_carrier_previous, CARRIER_TRIAL_MS);
 	}
 }
 
 void ctrl_poll(void)
 {
 	const int64_t now = k_uptime_get();
+
+	process_inbox();
 
 	if (s_carrier_trial) {
 		struct radio_stats rs;
