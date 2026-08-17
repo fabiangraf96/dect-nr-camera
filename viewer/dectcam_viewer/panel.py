@@ -18,8 +18,10 @@ knows how that works; see control.py.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import glob
 import os
+import signal
 import sys
 import threading
 import time
@@ -88,6 +90,11 @@ class Reader(threading.Thread):
         self.kbps = 0.0
         self.fps = 0.0
         self._fps_count = 0
+        # Longest a frame ever kept us waiting, within a reporting interval.
+        # This is what separates "the data stopped" from "the window stopped":
+        # if frames keep arriving on time while the picture is visibly stuck,
+        # the fault is in the drawing, not the link.
+        self.gap_max = 0.0
 
     def run(self) -> None:
         """Read, decode, reassemble.
@@ -121,8 +128,13 @@ class Reader(threading.Thread):
                 if img is None:
                     continue
                 with self.lock:
+                    now = time.monotonic()
+                    if self.frame_at:
+                        gap = now - self.frame_at
+                        if gap > self.gap_max:
+                            self.gap_max = gap
                     self.frame = img
-                    self.frame_at = time.monotonic()
+                    self.frame_at = now
                     self.frame_seq += 1
                     self.n_frames += 1
                     self._fps_count += 1
@@ -150,6 +162,15 @@ class Panel:
         self._last_seq = -1
         self._last_stale = -1
         self._last_labels = 0.0
+        # Start the clock now, so the first report covers a real interval
+        # rather than the time since the epoch.
+        self._last_diag = time.monotonic()
+        self._last_seen = 0
+        self._last_tick = 0.0
+        self._tick_gap_max = 0.0
+        self._draw_max = 0.0
+        self._ctrl_max = 0.0
+        self._lbl_max = 0.0
 
         root.title("DECT NR+ camera")
         root.columnconfigure(0, weight=1)
@@ -266,8 +287,23 @@ class Panel:
     # ---- refresh ----------------------------------------------------------
 
     def tick(self) -> None:
+        # Time between consecutive ticks. Tk asks for one every 40 ms, so
+        # anything much larger means the UI thread was blocked -- by the draw,
+        # by Tk itself, or by the display server. Measured here because a
+        # stalled window and a stalled link look identical from the outside.
+        now0 = time.monotonic()
+        if self._last_tick:
+            gap = now0 - self._last_tick
+            if gap > self._tick_gap_max:
+                self._tick_gap_max = gap
+        self._last_tick = now0
+
         self.ctrl.tick()
+        t_ctrl = time.monotonic()
         self._draw_frame()
+        draw_done = time.monotonic()
+        self._ctrl_max = max(self._ctrl_max, t_ctrl - now0)
+        self._draw_max = max(self._draw_max, draw_done - t_ctrl)
 
         # The text only has to keep up with a reader, not with the video.
         # Rewriting seven labels 25 times a second is work Tk does not need to
@@ -276,6 +312,36 @@ class Panel:
         if now - self._last_labels >= 0.25:
             self._last_labels = now
             self._update_labels()
+            self._lbl_max = max(self._lbl_max, time.monotonic() - now)
+
+        if now - self._last_diag >= 1.0:
+            interval = now - self._last_diag
+            self._last_diag = now
+            with self.reader.lock:
+                fgap = self.reader.gap_max
+                self.reader.gap_max = 0.0
+                seen = self.reader.n_frames
+                # Age of the newest frame, so an ongoing stall shows up. A
+                # gap is only recorded when a frame arrives to close it, so
+                # without this a complete stop reports zero -- the same as
+                # perfectly smooth.
+                age = time.monotonic() - self.reader.frame_at if self.reader.frame_at else 0.0
+            n = seen - self._last_seen
+            self._last_seen = seen
+            print(f"[diag] over {interval:4.1f} s | frames {n:3d} | "
+                  f"gap max {fgap*1000:5.0f} ms | "
+                  f"age now {age*1000:5.0f} ms | "
+                  f"tick gap {self._tick_gap_max*1000:5.0f} ms | "
+                  f"ctrl {self._ctrl_max*1000:5.0f} ms | "
+                  f"draw {self._draw_max*1000:5.0f} ms | "
+                  f"labels {self._lbl_max*1000:5.0f} ms | "
+                  f"backlog {getattr(self.reader.source, 'backlog', 0)} | "
+                  f"lost {self.reader.rea.n_frames_dropped}",
+                  flush=True)
+            self._tick_gap_max = 0.0
+            self._draw_max = 0.0
+            self._ctrl_max = 0.0
+            self._lbl_max = 0.0
 
         self.root.after(40, self.tick)
 
@@ -324,8 +390,27 @@ class Panel:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self._photo = ImageTk.PhotoImage(Image.fromarray(rgb))
-        self.video.configure(image=self._photo)
+        pil = Image.fromarray(rgb)
+
+        # Reuse the same PhotoImage and overwrite its pixels, rather than
+        # building a new one for every frame.
+        #
+        # Each PhotoImage owns an image on the X server. Creating one per frame
+        # meant allocating and freeing a server-side image fourteen times a
+        # second, and the client call returns immediately because X is
+        # asynchronous -- so the cost did not show up in the draw timing. It
+        # landed later, inside Tk's own event loop: the callback finished in
+        # 25 ms and then Tk did not call back for five and a half seconds.
+        # Smooth for a few frames, stopped for a few seconds, repeatedly.
+        #
+        # paste() writes into the image already on the server, so nothing is
+        # allocated or freed per frame.
+        if self._photo is None or self._photo.width() != pil.width \
+                or self._photo.height() != pil.height:
+            self._photo = ImageTk.PhotoImage(pil)
+            self.video.configure(image=self._photo)
+        else:
+            self._photo.paste(pil)
 
     def _update_labels(self) -> None:
         r = self.reader
@@ -409,6 +494,15 @@ def main(argv=None) -> int:
     ap.add_argument("--baud", type=int, default=1_000_000)
     ap.add_argument("--scale", type=float, default=2.0)
     args = ap.parse_args(argv)
+
+    # Dump every thread's stack on SIGUSR1.
+    #
+    # The window stalls for seconds at a time while our own timing says the
+    # callback returns in five milliseconds, so the time is going somewhere
+    # inside Tk. faulthandler is the right tool because it works from a C
+    # signal handler: it prints even when the main thread is blocked inside a
+    # C call and cannot run ordinary Python.
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
 
     if args.replay:
         source = FileSource(args.replay)

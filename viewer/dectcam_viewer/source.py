@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import collections
 import threading
-import queue
 import time
 from typing import Optional
 
-#: Largest single read, in bytes. Together with the queue depth this bounds how
-#: much can be sitting between the wire and the decoder, and buffered bytes are
-#: buffered time: at 40 kB/s every 40 kB standing here is a second of delay
-#: between something happening and it reaching the screen.
-READ_CAP = 8192
+#: Largest single read, in bytes. The port timeout usually ends the read long
+#: before this, so it is an upper bound rather than a target.
+READ_CAP = 4096
+
+#: How much may sit between the wire and the decoder, in bytes.
+#:
+#: Buffered bytes are buffered time: at 40 kB/s every 40 kB standing here is a
+#: second of delay between something happening and it reaching the screen. The
+#: bound has to be in bytes -- a bound on the number of chunks says nothing,
+#: because chunk size varies with how the reads happen to land.
+#:
+#: This is a safety valve, not a working buffer. In normal operation the queue
+#: is empty about two thirds of the time and never exceeds a handful of chunks.
+QUEUE_BYTES_MAX = 65536
 
 
 class SerialSource:
@@ -25,8 +34,7 @@ class SerialSource:
     1 Mbaud without flow control loses 13 % of bytes, with it 0 %.
     """
 
-    def __init__(self, port: str, baud: int = 1_000_000, rtscts: bool = True,
-                 queue_max: int = 16) -> None:
+    def __init__(self, port: str, baud: int = 1_000_000, rtscts: bool = True) -> None:
         import serial  # imported here so replay works without pyserial
 
         self._ser = serial.Serial()
@@ -41,7 +49,10 @@ class SerialSource:
         self.baud = baud
         self.rtscts = rtscts
 
-        self._q: queue.Queue[bytes] = queue.Queue(maxsize=queue_max)
+        self._q: "collections.deque[bytes]" = collections.deque()
+        self._qbytes = 0
+        self._qlock = threading.Lock()
+        self._data_ready = threading.Event()
         self._stop = threading.Event()
         self._overruns = 0
         self._errors = 0
@@ -52,12 +63,17 @@ class SerialSource:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                # Take whatever the kernel already has, not a fixed 4 kB.
-                # Leaving bytes sitting in the driver buffer is latency just as
-                # surely as leaving them in ours, and it keeps RTS deasserted,
-                # which backs the delay all the way up into the receiver.
-                waiting = self._ser.in_waiting
-                data = self._ser.read(max(1, min(waiting, READ_CAP)))
+                # A fixed-size read, with the port timeout doing the batching:
+                # pyserial returns early with whatever arrived, so at 40 kB/s
+                # and a 50 ms timeout this yields chunks of roughly 2 kB.
+                #
+                # Sizing the read from in_waiting instead was a bad idea. This
+                # loop is much faster than the link, so in_waiting is nearly
+                # always 0 and the read degenerates to one byte at a time --
+                # which then makes a queue bounded by chunk count meaningless,
+                # a few dozen bytes of buffer, and the overflow policy starts
+                # discarding live data. Batching is what makes the rest work.
+                data = self._ser.read(READ_CAP)
             except Exception as e:  # noqa: BLE001
                 # Do NOT give up here. This used to break out of the loop, so
                 # a single transient read error -- entirely possible on USB
@@ -70,37 +86,43 @@ class SerialSource:
                 continue
             if not data:
                 continue
-            try:
-                self._q.put_nowait(data)
-            except queue.Full:
-                # Behind: make room by throwing away the OLDEST chunk, not the
-                # one that just arrived.
+            with self._qlock:
+                self._q.append(data)
+                self._qbytes += len(data)
+
+                # Over the byte limit: make room by throwing away the OLDEST
+                # bytes, not the ones that just arrived.
                 #
                 # It used to drop the newest, which is exactly backwards for
-                # live video: it preserved stale bytes and pushed the fresh
-                # ones away, so the queue stayed full of old data and every
-                # frame after that carried the backlog as delay. With a 256
-                # chunk queue that was up to a megabyte, or twenty-five seconds
-                # at this bit rate -- and it never drained, because the reader
-                # consumes at exactly the rate the link delivers.
+                # live video: it preserved stale bytes and pushed fresh ones
+                # away, so the queue stayed full of old data and every frame
+                # after that carried the backlog as delay. The old limit was
+                # 256 chunks -- up to a megabyte, twenty-five seconds at this
+                # bit rate -- and it never drained, because the reader consumes
+                # at exactly the rate the link delivers.
                 #
                 # Dropping the oldest costs the frame those bytes belonged to
                 # and nothing else, and the queue empties again.
-                try:
-                    self._q.get_nowait()
-                except queue.Empty:
-                    pass
-                self._overruns += 1
-                try:
-                    self._q.put_nowait(data)
-                except queue.Full:
-                    pass
+                while self._qbytes > QUEUE_BYTES_MAX and len(self._q) > 1:
+                    self._qbytes -= len(self._q.popleft())
+                    self._overruns += 1
+
+            self._data_ready.set()
 
     def read(self, timeout: float = 0.1) -> bytes:
-        try:
-            return self._q.get(timeout=timeout)
-        except queue.Empty:
-            return b""
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._qlock:
+                if self._q:
+                    data = self._q.popleft()
+                    self._qbytes -= len(data)
+                    if not self._q:
+                        self._data_ready.clear()
+                    return data
+                self._data_ready.clear()
+
+            if not self._data_ready.wait(max(0.0, deadline - time.monotonic())):
+                return b""
 
     def write(self, data: bytes) -> None:
         """Send bytes back to the receiver.
@@ -118,12 +140,12 @@ class SerialSource:
 
     @property
     def backlog(self) -> int:
-        """Chunks waiting to be decoded.
+        """Bytes waiting to be decoded.
 
         Anything standing here is pure latency: bytes that arrived, were
         buffered, and have not reached the screen yet. It should hover at zero.
         """
-        return self._q.qsize()
+        return self._qbytes
 
     @property
     def errors(self) -> int:
