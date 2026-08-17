@@ -45,9 +45,50 @@ TYPE_CTRL = 4
 
 META_LEN = 8
 STATS_LEN = 16
+CTRL_LEN = 6
 
 MAX_PAYLOAD = 1024
 MAX_PACKET = MAX_PAYLOAD + OVERHEAD
+
+# Control opcodes. Mirrors the block in dectcam_proto.h.
+#
+# Control flows opposite to video: the PC sends a CTRL packet down the
+# receiver's USB link, the receiver forwards it over the air, and the
+# transmitter either applies it to its own radio or passes it to the camera.
+CTRL_NOP = 0
+CTRL_SET_TX_POWER = 1
+CTRL_SET_MCS = 2
+CTRL_SET_CARRIER = 3
+CTRL_SET_RES = 4
+CTRL_SET_FPS = 5
+CTRL_SET_QUALITY = 6
+CTRL_ACK = 7
+CTRL_CARRIER_OK = 8
+
+ACK_OK = 0
+ACK_BAD_ARG = 1
+ACK_UNSUPP = 2
+ACK_FAILED = 3
+
+ACK_TEXT = {
+    ACK_OK: "applied",
+    ACK_BAD_ARG: "rejected: value out of range",
+    ACK_UNSUPP: "rejected: not supported",
+    ACK_FAILED: "failed to apply",
+}
+
+# The resolutions the camera understands, in the order its own table uses --
+# CTRL_SET_RES carries the index, not a string.
+RESOLUTIONS = [
+    ("qqvga", 160, 120),
+    ("qcif", 176, 144),
+    ("hqvga", 240, 176),
+    ("qvga", 320, 240),
+    ("cif", 400, 296),
+    ("hvga", 480, 320),
+    ("vga", 640, 480),
+    ("svga", 800, 600),
+]
 
 
 # --------------------------------------------------------------------------
@@ -149,6 +190,34 @@ class Stats:
         if self.snr == SNR_NOT_MEASURED:
             return None
         return self.snr / 4.0
+
+
+@dataclass
+class Ctrl:
+    """A control telegram.
+
+    `seq` is here because control frames are sent repeatedly: the transmitter
+    only listens in short windows between video bursts, so a single copy would
+    usually be missed. Whoever acts on a telegram ignores a `seq` it has
+    already seen, which makes retransmission harmless.
+    """
+
+    opcode: int
+    seq: int
+    arg32: int
+
+    @classmethod
+    def unpack(cls, b: bytes) -> "Ctrl":
+        op, seq, arg = struct.unpack("<BBI", b[:CTRL_LEN])
+        return cls(op, seq, arg)
+
+    def pack(self) -> bytes:
+        return struct.pack("<BBI", self.opcode, self.seq, self.arg32)
+
+
+def encode_ctrl(opcode: int, seq: int, arg32: int) -> bytes:
+    """Build a complete CTRL packet, ready to write to the receiver."""
+    return encode(TYPE_CTRL, payload=Ctrl(opcode, seq, arg32).pack())
 
 
 def encode(

@@ -88,6 +88,30 @@ def main() -> int:
     check(ns.snr_db is None, "snr sentinel -> None")
     print("  not-measured sentinels map to None")
 
+    # Control telegrams.
+    c = proto.Ctrl(proto.CTRL_SET_CARRIER, 42, 1665)
+    check(proto.Ctrl.unpack(c.pack()) == c, "ctrl roundtrip")
+    check(len(c.pack()) == proto.CTRL_LEN, f"ctrl payload is {len(c.pack())} B")
+
+    raw = proto.encode_ctrl(proto.CTRL_SET_MCS, 7, 3)
+    dec = proto.Decoder()
+    got = list(dec.feed(raw))
+    check(len(got) == 1, f"ctrl packet decodes ({len(got)} packets)")
+    if got:
+        check(got[0].type == proto.TYPE_CTRL, "decoded as CTRL")
+        cc = proto.Ctrl.unpack(got[0].payload)
+        check(cc.opcode == proto.CTRL_SET_MCS and cc.seq == 7 and cc.arg32 == 3,
+              f"ctrl fields survive: {cc}")
+    print(f"  ctrl: {proto.CTRL_LEN} B payload, {len(raw)} B on the wire")
+
+    # The resolution table is an index on the wire, so its order is part of
+    # the protocol: a mismatch with the camera's table would silently select
+    # the wrong size.
+    check(proto.RESOLUTIONS[3][0] == "qvga", "resolution index 3 is qvga")
+    check(proto.RESOLUTIONS[5][0] == "hvga", "resolution index 5 is hvga")
+    check(len(proto.RESOLUTIONS) == 8, "eight resolutions")
+    print(f"  resolution table: {len(proto.RESOLUTIONS)} entries, index 3 = qvga")
+
     print("\n" + ("FAILED" if failures else "ALL PASS") + f" ({failures} failures)")
     return 1 if failures else 0
 

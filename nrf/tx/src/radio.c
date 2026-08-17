@@ -25,6 +25,25 @@ BUILD_ASSERT(CONFIG_DECTCAM_CARRIER != 0,
 
 static uint16_t s_device_id;
 static struct radio_stats s_stats;
+static radio_ctrl_cb_t s_ctrl_cb;
+
+/*
+ * Live radio parameters, seeded from Kconfig.
+ *
+ * They were compile-time constants until control from the receiver was added.
+ * Keeping them in one struct makes it obvious that the transport block size
+ * and the fragment size are derived quantities that must be recomputed
+ * whenever the MCS moves -- getting that wrong means the modem silently
+ * rejects every transmit.
+ */
+static struct radio_cfg s_cfg = {
+	.carrier = CONFIG_DECTCAM_CARRIER,
+	.mcs = CONFIG_DECTCAM_MCS,
+	.tx_power = CONFIG_DECTCAM_TX_POWER,
+	.subslots = CONFIG_DECTCAM_PACKET_LEN_SUBSLOTS,
+	.tbs_bytes = DECTCAM_TBS_BYTES,
+	.frag_payload = DECTCAM_FRAG_PAYLOAD,
+};
 
 /* Signalled when an asynchronous PHY operation finishes. */
 static K_SEM_DEFINE(op_sem, 0, 1);
@@ -34,6 +53,7 @@ static volatile int s_op_err;
 static bool s_fatal;
 
 #define TX_HANDLE 0u
+#define RX_HANDLE 1u
 #define OP_TIMEOUT K_MSEC(500)
 
 static void handle_common(int err)
@@ -76,12 +96,28 @@ static void dect_phy_event_handler(const struct nrf_modem_dect_phy_event *evt)
 	case NRF_MODEM_DECT_PHY_EVT_DEINIT:
 		handle_common(0);
 		break;
+	case NRF_MODEM_DECT_PHY_EVT_PDC:
+		/*
+		 * Only ever arrives during a listen window, and the only thing
+		 * anyone sends this way is control. Hand it straight over; the
+		 * callback must not call back into the modem.
+		 */
+		s_stats.ctrl_rx++;
+		if (s_ctrl_cb) {
+			s_ctrl_cb((const uint8_t *)evt->pdc.data, evt->pdc.len);
+		}
+		break;
+	case NRF_MODEM_DECT_PHY_EVT_PCC:
+	case NRF_MODEM_DECT_PHY_EVT_PCC_ERROR:
+	case NRF_MODEM_DECT_PHY_EVT_PDC_ERROR:
+		/* Nothing to do: a missed control frame is simply repeated. */
+		break;
+
 	case NRF_MODEM_DECT_PHY_EVT_REJECT:
 		LOG_WRN("operation rejected");
 		break;
 	default:
-		/* Capability/band/time/RSSI queries and RX events are not used
-		 * by the transmitter. */
+		/* Capability/band/time/RSSI queries are not used here. */
 		break;
 	}
 }
@@ -154,20 +190,20 @@ int radio_init(void)
 
 int radio_tx(const uint8_t *data, size_t len)
 {
-	if (len == 0 || len > (size_t)DECTCAM_TBS_BYTES) {
+	if (len == 0 || len > (size_t)s_cfg.tbs_bytes) {
 		return -EINVAL;
 	}
 
 	struct dectcam_phy_hdr_type1 hdr = {
 		.header_format = 0,
 		.packet_length_type = 0, /* subslots */
-		.packet_length = DECTCAM_PKT_LEN_FIELD,
+		.packet_length = (uint8_t)(s_cfg.subslots - 1),
 		.short_network_id = (CONFIG_DECTCAM_NETWORK_ID & 0xff),
 		.transmitter_id_hi = (s_device_id >> 8),
 		.transmitter_id_lo = (s_device_id & 0xff),
-		.transmit_power = CONFIG_DECTCAM_TX_POWER,
+		.transmit_power = s_cfg.tx_power,
 		.reserved = 0,
-		.df_mcs = CONFIG_DECTCAM_MCS,
+		.df_mcs = s_cfg.mcs,
 	};
 
 	struct nrf_modem_dect_phy_tx_params tx = {
@@ -175,7 +211,7 @@ int radio_tx(const uint8_t *data, size_t len)
 		.handle = TX_HANDLE,
 		.network_id = CONFIG_DECTCAM_NETWORK_ID,
 		.phy_type = 0,
-		.carrier = CONFIG_DECTCAM_CARRIER,
+		.carrier = s_cfg.carrier,
 		.phy_header = (union nrf_modem_dect_phy_hdr *)&hdr,
 		.data = (void *)data,
 		.data_size = len,
@@ -222,9 +258,114 @@ int radio_tx(const uint8_t *data, size_t len)
 	return 0;
 }
 
+int radio_listen(uint32_t ms)
+{
+	struct nrf_modem_dect_phy_rx_params rx = {
+		.start_time = 0,
+		.handle = RX_HANDLE,
+		.network_id = CONFIG_DECTCAM_NETWORK_ID,
+		.mode = NRF_MODEM_DECT_PHY_RX_MODE_CONTINUOUS,
+		.rssi_interval = NRF_MODEM_DECT_PHY_RSSI_INTERVAL_OFF,
+		.link_id = NRF_MODEM_DECT_PHY_LINK_UNSPECIFIED,
+		.rssi_level = -60,
+		.carrier = s_cfg.carrier,
+		.duration = ms * NRF_MODEM_DECT_MODEM_TIME_TICK_RATE_KHZ,
+		.filter.short_network_id = CONFIG_DECTCAM_NETWORK_ID & 0xff,
+		.filter.is_short_network_id_used = 1,
+		.filter.receiver_identity = 0,
+	};
+
+	int err = nrf_modem_dect_phy_rx(&rx);
+
+	if (err) {
+		LOG_WRN("listen failed to start: %d", err);
+		return err;
+	}
+
+	s_stats.listen_windows++;
+
+	/*
+	 * Wait for the window to elapse. The generous margin is because the
+	 * modem reports completion only after the whole duration, and a video
+	 * fragment must not be queued while the receiver still owns the radio.
+	 */
+	if (k_sem_take(&op_sem, K_MSEC(ms + 200)) != 0) {
+		LOG_WRN("listen window did not complete");
+		return -ETIMEDOUT;
+	}
+	return 0;
+}
+
+void radio_set_ctrl_cb(radio_ctrl_cb_t cb)
+{
+	s_ctrl_cb = cb;
+}
+
 uint16_t radio_device_id(void)
 {
 	return s_device_id;
+}
+
+void radio_get_cfg(struct radio_cfg *out)
+{
+	if (out) {
+		*out = s_cfg;
+	}
+}
+
+int radio_set_tx_power(uint8_t idx)
+{
+	/*
+	 * The header field is 4 bits. Which indices map to which dBm depends
+	 * on the band and the modem firmware, so the only check worth making
+	 * here is that it fits.
+	 */
+	if (idx > 15) {
+		return -EINVAL;
+	}
+	s_cfg.tx_power = idx;
+	LOG_INF("tx power index -> %u", idx);
+	return 0;
+}
+
+int radio_set_mcs(uint8_t mcs)
+{
+	const int tbs = dectcam_tbs_bytes_subslots(mcs, s_cfg.subslots);
+
+	if (tbs < 0) {
+		LOG_WRN("MCS %u is not valid with %u subslots", mcs, s_cfg.subslots);
+		return -EINVAL;
+	}
+	if (tbs <= (int)DECTCAM_OVERHEAD) {
+		return -EINVAL;
+	}
+
+	/*
+	 * Refuse a transport block that cannot carry the fragments the camera
+	 * is currently producing. Accepting it would leave every transmit
+	 * failing with -EINVAL and the link silently dead; the caller can lower
+	 * the fragment size first and try again.
+	 */
+	if (tbs < (int)(s_cfg.frag_payload + DECTCAM_OVERHEAD)) {
+		LOG_WRN("MCS %u gives a %d B block, too small for %u B fragments",
+			mcs, tbs, s_cfg.frag_payload);
+		return -EINVAL;
+	}
+
+	s_cfg.mcs = mcs;
+	s_cfg.tbs_bytes = (uint16_t)tbs;
+	LOG_INF("MCS -> %u (%d B transport block)", mcs, tbs);
+	return 0;
+}
+
+int radio_set_carrier(uint16_t carrier)
+{
+	if (carrier == 0) {
+		return -EINVAL;
+	}
+	s_cfg.carrier = carrier;
+	LOG_INF("carrier -> %u", carrier);
+	return 0;
 }
 
 void radio_get_stats(struct radio_stats *out)
