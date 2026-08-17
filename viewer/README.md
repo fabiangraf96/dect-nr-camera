@@ -16,9 +16,27 @@ python3 -m venv .venv
 
 ## Running
 
+Two front ends over the same machinery.
+
+**With the control panel** — picture on the left, dropdowns on the right for
+carrier, MCS, transmit power, resolution, frame rate and JPEG quality:
+
+```bash
+./run_panel.sh                               # autodetects the port
+./run_panel.sh --port /dev/ttyACM2 --scale 3
+./run_panel.sh --replay capture.bin          # controls are inert
+```
+
+Tk is used here rather than OpenCV's own window, because OpenCV has no
+dropdowns — only trackbars — and a row of sliders labelled 0..7 is a poor way
+to choose a resolution. On Debian and Ubuntu `tkinter` needs the `python3-tk`
+package, even though it is part of the standard library.
+
+**Picture only**, no panel:
+
 ```bash
 ./run_viewer.sh                              # autodetects the port
-./run_viewer.sh --port /dev/ttyACM1 --scale 3
+./run_viewer.sh --port /dev/ttyACM2 --scale 3
 ./run_viewer.sh --no-gui                     # statistics only, no window
 ./run_viewer.sh --replay capture.bin --replay-rate 60
 ./run_viewer.sh --record session.bin         # also save the raw stream
@@ -99,10 +117,18 @@ statistics. `--dump` writes out the recovered images.
 |---|---|
 | `proto.py` | wire format — Python mirror of `dectcam_proto.h` |
 | `reassembly.py` | fragments → complete JPEG frames |
-| `source.py` | serial and file byte sources |
-| `viewer.py` | live display |
+| `source.py` | serial and file byte sources; the serial one also writes |
+| `control.py` | issues control telegrams, matches acknowledgements to them |
+| `panel.py` | live display with the control side panel |
+| `viewer.py` | live display, no panel |
 | `analyze.py` | offline capture analysis |
 | `selftest.py` | cross-checks `proto.py` against the C reference vector |
+
+`control.py` is deliberately separate from the window: the panel says "set the
+carrier to 1667" and does not have to know about sequence numbers, retries, or
+which commands can be acknowledged at all. Carrier changes cannot be — the far
+end answers on a channel this end has not moved to yet — so success is judged
+by watching where the link ends up.
 
 ## Self-test
 

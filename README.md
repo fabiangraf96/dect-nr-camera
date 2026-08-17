@@ -94,17 +94,42 @@ when nothing appears, are in each subdirectory's README.
 
 ## Runtime control
 
-The transmitter's shell reaches the camera over the UART back-channel, so
-resolution and quality can be changed while the link is running:
+Everything adjustable is reachable from the PC, through a side panel next to
+the picture:
 
-```
-dectcam-tx:~$ cam quality 4      # 4..63, lower is better
-dectcam-tx:~$ cam res hvga       # qqvga qcif hqvga qvga cif hvga vga svga
-dectcam-tx:~$ dectstat           # link and radio counters
+```bash
+cd viewer && ./run_panel.sh
 ```
 
-Changes are announced to the viewer in the next metadata packet, so the overlay
-follows along.
+| Radio | Camera |
+|---|---|
+| Carrier (1657–1677, odd) | Resolution |
+| MCS | Target frame rate |
+| Transmit power index | JPEG quality |
+
+Commands travel against the video — PC → receiver → over the air → transmitter
+— and the transmitter either applies them to its radio or passes them to the
+camera. It announces its settings once a second, so the panel shows where the
+link actually is rather than what was last asked for.
+
+Changing the carrier moves both ends. Neither waits for the other: each retunes
+on its own timer and returns to the previous channel by itself if no traffic
+appears, so a command that only half arrives cannot strand them apart.
+
+The same commands are available without the GUI:
+
+```bash
+scripts/send_ctrl.py carrier 1667
+scripts/send_ctrl.py res hvga
+scripts/read_state.py
+```
+
+and the transmitter's own shell still works for the camera:
+
+```
+dectcam-tx:~$ cam quality 4
+dectcam-tx:~$ dectstat
+```
 
 ## Regulatory note
 

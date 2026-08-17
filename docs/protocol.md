@@ -11,6 +11,11 @@ The **same packet format** is used on all three hops:
 2. nRF9151 TX → nRF9151 RX (DECT NR+ PDC payload)
 3. nRF9151 RX → PC (VCOM1, 1 Mbaud, RTS/CTS)
 
+…and on the return path, which carries control the other way:
+
+4. PC → nRF9151 RX (the same VCOM1, which is full duplex)
+5. nRF9151 RX → nRF9151 TX (DECT NR+, in the gaps between video bursts)
+
 Using one format everywhere means the nRF firmware never parses or rewrites
 packets — it moves opaque byte blobs — and the same decoder can be attached at
 any hop for debugging.
@@ -114,7 +119,95 @@ rendered as "unknown" rather than as a number:
 
 ## Type 4 — `CTRL`
 
-Reserved. Not implemented in the unidirectional design.
+Control, and the acknowledgement of it. Six bytes:
+
+```
+ offset  size  field
+   0      1    opcode
+   1      1    seq
+   2      4    arg
+```
+
+| Opcode | Name | Argument |
+|---|---|---|
+| 1 | `SET_TX_POWER` | power index, 0–13 |
+| 2 | `SET_MCS` | 0–4 |
+| 3 | `SET_CARRIER` | carrier number |
+| 4 | `SET_RES` | index into the resolution table |
+| 5 | `SET_FPS` | 1–30 |
+| 6 | `SET_QUALITY` | 4–63, lower is better |
+| 7 | `ACK` | status: 0 applied, 1 bad argument, 2 unsupported, 3 failed |
+| 8 | `CARRIER_OK` | the receiver confirms the new carrier |
+
+`SET_RES` carries an index rather than a name, so **the order of the resolution
+table is part of the protocol**. It is `qqvga, qcif, hqvga, qvga, cif, hvga,
+vga, svga`, and the self-tests on both sides pin it down.
+
+### Why there is a sequence number
+
+The transmitter cannot listen continuously — it is busy sending video, and
+turning the radio around costs air time. It opens a 30 ms window every 200 ms,
+so the receiver sends each telegram as a burst of copies 25 ms apart. `seq`
+lets the far end tell a fresh command from a repeat of one it has already acted
+on. Without it, "set the resolution" would be harmless to repeat but anything
+relative would not.
+
+De-duplication compares against the previous sequence only, so a host that
+restarts and reuses a number does not lose a command; it would have to reuse
+the same number twice in succession.
+
+### Acknowledgement
+
+The transmitter answers by putting a `CTRL` packet with opcode `ACK` into the
+**video stream**, which already flows in the right direction. It repeats it
+every 150 ms for 2.5 s: the receiver is deaf while transmitting its burst, and
+a prompt acknowledgement would otherwise be sent straight into that deafness.
+
+`SET_CARRIER` is the exception — it is never acknowledged, and cannot be. The
+transmitter applies the new carrier the moment it hears the telegram and
+answers there, on a channel the receiver has not moved to yet. Both ends move
+on their own timers instead; see below.
+
+## Type 5 — `RADIO_CFG`
+
+What the transmitter's radio is currently set to, announced once a second.
+Eight bytes:
+
+```
+ offset  size  field
+   0      2    carrier
+   2      1    mcs
+   3      1    tx_power
+   4      1    subslots
+   5      1    reserved
+   6      2    frag_payload
+```
+
+Exists for the same reason `FRAME_META` does: these are changeable at run time
+now, and a viewer that attaches later has no other way to learn where the link
+ended up. It is also how a `SET_CARRIER` is judged, since that one has no
+acknowledgement.
+
+## Changing the carrier
+
+This is the one command that can lose the link outright. If the two ends end up
+on different channels, nothing can be said to either of them again.
+
+Neither end waits for the other:
+
+1. The receiver announces the new carrier on the **old** one, as a burst
+   lasting about a second, then retunes regardless.
+2. The transmitter applies it as soon as it hears it, and starts a 6 s trial.
+3. The receiver watches for video on the new carrier. If it appears, it sends
+   `CARRIER_OK`, which ends the transmitter's trial.
+4. If no video appears within 4 s, the receiver returns to the old carrier. If
+   no `CARRIER_OK` arrives within 6 s, so does the transmitter.
+
+The receiver's deadline is deliberately the shorter one, so the two converge on
+the old channel rather than crossing over.
+
+Measured: hopping 1665 → 1657 → 1671 → 1677 → 1665 keeps the link every time,
+video included.
 
 ## Fragmentation
 

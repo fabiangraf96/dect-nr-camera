@@ -240,18 +240,37 @@ dropped whole at the viewer and counted in the HUD.
 `frag_idx`, so the reassembler recovers on the next frame after any loss
 without a handshake.
 
-**Camera control over a UART back-channel, not over the air.** The transmitter's
-shell forwards text to the camera on the same UART, in the direction the video
-does not use:
+**Control travels against the video, all the way from the PC.** The operator is
+at the receiver, so commands go PC → receiver → air → transmitter, and the
+transmitter either applies them to its own radio or passes them to the camera
+on the UART back-channel:
 
 ```
-dectcam-tx:~$ cam quality 4
-dectcam-tx:~$ cam res hvga
+PC  --USB-->  receiver  --DECT-->  transmitter  --UART-->  camera
 ```
 
-Driving this from the PC viewer instead would need a DECT uplink, which means
-both nRF apps grow TX *and* RX state machines. The back-channel gets the same
-result over a wire that was already there.
+Every hop already existed except the middle one. Adding it meant giving the
+transmitter a receive path and the receiver a transmit path, which is the bulk
+of the complexity:
+
+* The transmitter cannot listen continuously — it is busy sending video, and
+  turning the radio around costs air time. It opens a 30 ms window every
+  200 ms, so the receiver sends each telegram as a burst of copies 25 ms apart
+  and a sequence number makes the repeats harmless.
+* The receiver has one radio, so transmitting means not receiving. It is deaf
+  for the second its burst lasts, which is why the transmitter repeats its
+  acknowledgement for well past the end of it.
+
+Acknowledgements ride the video stream rather than needing a second radio
+turnaround.
+
+The alternative — driving the camera only from the transmitter's own shell —
+worked, but put the controls on a different machine from the picture.
+
+**Nobody waits for the other end when changing the carrier.** It is the one
+command that can lose the link outright, so both ends move on their own timers
+and return on their own if no traffic appears, the receiver first. See
+[`protocol.md`](protocol.md).
 
 ## Regulatory note
 
