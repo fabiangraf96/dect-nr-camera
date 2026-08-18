@@ -22,7 +22,9 @@
 
 LOG_MODULE_DECLARE(dectcam_tx, CONFIG_DECTCAM_LOG_LEVEL);
 
-static const struct device *const uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart2));
+/* Named by the board overlay, not here: the DK uses uart2 and the EK uart3,
+ * because on the EK instance 2 belongs to the PMIC's i2c. */
+static const struct device *const uart_dev = DEVICE_DT_GET(DT_CHOSEN(dectcam_link_uart));
 
 /*
  * Two DMA buffers, swapped by the driver. Each should hold a good fraction of

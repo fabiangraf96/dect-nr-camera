@@ -1,4 +1,17 @@
-# Wiring — Freenove ESP32-S3 ↔ nRF9151 DK (transmitter)
+# Wiring — Freenove ESP32-S3 ↔ nRF9151 DK or nRF9131 EK (transmitter)
+
+Two radio boards are supported and neither replaces the other. **The camera
+board and its firmware are identical for both**; only the pin numbers at the
+nRF end change, and those live in the per-board overlay.
+
+| | nRF9151 DK | nRF9131 EK |
+|---|---|---|
+| Board target | `nrf9151dk/nrf9151/ns` | `nrf9131ek/nrf9131/ns` |
+| Link UART | `uart2` | `uart3` (instance 2 is the PMIC's i2c) |
+| TX header pins | Arduino D2/D3/D6/D7 | `P0.13`–`P0.16`, left header |
+| RX → PC | VCOM1, **with** RTS/CTS | VCOM1, **without** — not wired on this board |
+
+Jump to [nRF9131 EK](#nrf9131-ek-transmitter) if that is the board on the bench.
 
 ## Summary
 
@@ -157,25 +170,101 @@ link stalled at fragment 0/5 (33 drops); is the nRF9151 powered and CTS wired?
 
 That message means the wiring, not the firmware.
 
+## nRF9131 EK (transmitter)
+
+Same four signals, same ESP32-S3 pins, same 1 kΩ resistors, same reasoning as
+above. Only the far end moves.
+
+**Everything is on the left-hand header, ground included** — the right-hand
+header is not needed at all.
+
+| # | ESP32-S3 pin | Signal | nRF9131 EK pin | In-line part |
+|---|---|---|---|---|
+| 1 | `GPIO42` | video, ESP32 TX → nRF RX | `P0.13` | 1 kΩ series |
+| 2 | `GPIO21` | commands, ESP32 RX ← nRF TX | `P0.14` | — |
+| 3 | `GPIO1` | ESP32 CTS ← nRF RTS | `P0.15` | — |
+| 4 | `GPIO47` | ESP32 RTS → nRF CTS | `P0.16` | 1 kΩ series |
+| 5 | `GND` | ground | `GND` between `P0.13` and `P0.14` | — |
+
+The left header runs, top to bottom:
+
+```
+    GPIO2
+    RST
+    VDD
+    P0.13   <- video RX      wire 1
+    GND     <- ground        wire 5
+    P0.14   <- commands TX   wire 2
+    P0.15   <- RTS           wire 3
+    P0.16   <- CTS           wire 4
+    P0.17   ─┐
+    P0.18    │ free, but P0.17 and P0.23-P0.25 are VCOM1
+    P0.19    │
+    P0.20   ─┤ spi3 (disabled by our overlay, so free)
+    ...      │
+    P0.31   ─┘ P0.28 button, P0.29-P0.31 LEDs
+```
+
+`P0.13`–`P0.16` are the only four *contiguous* free pins on this header, and
+the header's own `GND` falls in the middle of them. The board spends `P0.17`
+and `P0.23`–`P0.25` on VCOM1, `P0.20`–`P0.22` and `P0.26` on spi3, `P0.28` on
+the button and `P0.29`–`P0.31` on the LEDs; that leaves `P0.13`–`P0.16`,
+`P0.18`, `P0.19` and `P0.27`. The right-hand header carries `P0.00`–`P0.12`.
+
+> **VDD_IO on the EK has not been measured.** The 3.0 V / 1.8 V argument above
+> applies here too and the same no-meter diagnostic works — see
+> [Telling a 3.0 V rail from a 1.8 V one](#telling-a-30-v-rail-from-a-18-v-one-without-a-meter).
+> Fit the 1 kΩ resistors and the wiring is safe either way.
+
 ## Receiver board
 
-Nothing to wire. Connect the RX DK to the PC with USB-C; the video stream
-arrives on **VCOM1**, the *second* serial port the DK enumerates.
+Nothing to wire, on either board. Connect the RX kit to the PC with USB-C; the
+video stream arrives on **VCOM1**, the *second* serial port it enumerates.
 
-Three USB devices end up on the host:
+### The EK has no flow control on VCOM1
+
+This is the one place the two boards genuinely differ, and it was found the
+hard way. With `hw-flow-control` enabled the EK receiver stalls outright:
+
+```
+<wrn> dectcam_rx: UART TX stalled; is the host asserting CTS?
+```
+
+The outbound queue backs up and not one byte reaches the PC. The host had
+`crtscts` set with a reader attached, so it *was* asserting RTS; had the EK
+connected it, CTS would have gone active. Drop to two wires and no flow
+control and the same firmware streams cleanly — 17 packets, 0 CRC errors.
+
+The consequence: **the EK receiver cannot be throttled by the PC**, so a host
+that stalls costs bytes rather than merely delaying them. Two things make that
+survivable — every packet is CRC-checked and any frame missing a fragment is
+discarded, so loss degrades the picture rather than corrupting it; and the
+video needs about 45 kB/s against the 100 kB/s the line carries. If loss does
+show up in practice, the fix is a lower baud rate in the EK overlay, not more
+wires. On the DK, keep flow control: there it is measured as the difference
+between 13.1 % loss and none.
+
+Three USB devices end up on the host. The EK enumerates exactly like the DK —
+`nrfutil device list` reports both as J-Link with `vcom: 0` and `vcom: 1`:
 
 | Device | Enumerates as | Carries |
 |---|---|---|
-| Transmitter DK | J-Link, two CDC ports | VCOM0 console; VCOM1 unused |
-| Receiver DK | J-Link, two CDC ports | VCOM0 console; **VCOM1 = video** |
+| Transmitter kit | J-Link, two CDC ports | VCOM0 console; VCOM1 unused |
+| Receiver kit | J-Link, two CDC ports | VCOM0 console; **VCOM1 = video** |
 | Camera board | USB-serial bridge | console and flashing |
+
+The camera board has two USB-C sockets — the UART one behind a CH343 bridge and
+the ESP32-S3's own native USB. Either can flash and both carry the console, but
+they enumerate under completely different names, so `scripts/boards.sh` looks
+for whichever is present rather than hard-coding one.
 
 Address them through `/dev/serial/by-id/`, never `ttyACMx` — the numbering
 changes on every re-enumeration. `-if00` is VCOM0 and `-if02` is VCOM1, so the
 video port is the J-Link `-if02` of whichever kit you made the receiver.
 
-The PC side **must** open VCOM1 with RTS/CTS enabled. Without it, measurements
-on this hardware showed 13 % byte loss at 1 Mbaud; with it, zero.
+On the **DK**, the PC side **must** open VCOM1 with RTS/CTS enabled. Without it,
+measurements on this hardware showed 13 % byte loss at 1 Mbaud; with it, zero.
+On the **EK** it makes no difference, because the lines are not connected.
 
 ## Bring-up order
 

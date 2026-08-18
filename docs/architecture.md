@@ -38,7 +38,7 @@ verbatim into `esp32/main/` and mirrored as `proto.py` in the viewer.
 | Camera | Freenove ESP32-S3 WROOM CAM (ESP32-S3-WROOM-1 **N16R8**) |
 | Sensor | **OV3660** — Freenove ships this board with either an OV2640 or an OV3660; ours is the latter, and `esp32-camera` handles both |
 | Memory | 16 MB quad flash, 8 MB octal PSRAM |
-| Radio | 2 × nRF9151 DK (PCA10171), DECT NR+ modem firmware 2.0.0 |
+| Radio | 2 × nRF9151 DK (PCA10171) **or** 2 × nRF9131 EK (PCA10165), DECT NR+ modem firmware 2.0.0 |
 
 Both boards are powered from their own USB-C cables. See
 [`wiring.md`](wiring.md) for the four signal wires between them.
@@ -92,12 +92,26 @@ on-board nRF5340 interface MCU**. The nRF91 series has no USB device
 controller. The RX board therefore reaches the PC over VCOM1, not native USB —
 which is also why the link ceiling is a UART ceiling.
 
-### uart2, not uart1
+### Not uart1, and not the same instance on both boards
 
-`nrf9151dk_nrf9151_ns.dts` disables `uart1` because TF-M claims it for secure
-logging. Rather than reconfiguring TF-M, we route **`uart2`** to the pads we
-need via pinctrl — the nRF91 pin matrix allows any UARTE instance on any pin.
-The TX board points it at the Arduino header, the RX board at the VCOM1 pads.
+Both boards' non-secure devicetrees disable `uart1` because TF-M claims it for
+secure logging. Rather than reconfiguring TF-M, we borrow another UARTE and
+route it to the pads we need via pinctrl — the nRF91 pin matrix allows any
+UARTE instance on any pin. The TX board points it at a header, the RX board at
+the VCOM1 pads.
+
+Which instance is free is a board property, not an application one. On the
+nRF91 each instance number is shared by SPIM, SPIS, TWIM, TWIS and UARTE, so
+only one of them can exist at a time:
+
+| | free instance | because |
+|---|---|---|
+| nRF9151 DK | `uart2` | nothing else claims instance 2 |
+| nRF9131 EK | `uart3` | instance 2 is `i2c2`, the nPM1300 PMIC; instance 3 is only an already-disabled external flash |
+
+The C names no instance. Each overlay sets `chosen { dectcam,link-uart }` and
+the source resolves that, which is what keeps one firmware serving both boards
+instead of forking it.
 
 ### Hardware flow control is mandatory
 
@@ -121,7 +135,7 @@ Everything below was confirmed on the actual hardware, not assumed.
 |---|---|
 | NCS | v3.3.1, Zephyr 4.3.99, Zephyr SDK 0.17.0 |
 | ESP-IDF | v5.4.2, target `esp32s3` |
-| Board target | `nrf9151dk/nrf9151/ns` (TF-M non-secure) |
+| Board target | `nrf9151dk/nrf9151/ns` or `nrf9131ek/nrf9131/ns` (TF-M non-secure) |
 | DK VDD_IO | **3.0 V** — measured off the wire; there is no SW9 on this DK |
 | VCOM1 pins | P0.29 = TX, P0.28 = RX, P0.16 = RTS, P0.17 = CTS |
 | VCOM1 ceiling | 1 Mbaud, 81–83 kB/s lossless **with RTS/CTS** |

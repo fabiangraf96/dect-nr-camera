@@ -24,7 +24,9 @@
 
 LOG_MODULE_DECLARE(dectcam_rx, CONFIG_DECTCAM_LOG_LEVEL);
 
-static const struct device *const uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart2));
+/* Named by the board overlay, not here: the DK uses uart2 and the EK uart3,
+ * because on the EK instance 2 belongs to the PMIC's i2c. */
+static const struct device *const uart_dev = DEVICE_DT_GET(DT_CHOSEN(dectcam_link_uart));
 
 RING_BUF_DECLARE(tx_ring, CONFIG_DECTCAM_RX_RING_SIZE);
 
@@ -96,7 +98,7 @@ static void uart_cb(const struct device *dev, struct uart_event *evt, void *user
 int uart_out_init(void)
 {
 	if (!device_is_ready(uart_dev)) {
-		LOG_ERR("uart2 not ready");
+		LOG_ERR("link uart not ready");
 		return -ENODEV;
 	}
 
@@ -118,7 +120,7 @@ int uart_out_init(void)
 	}
 	rx_next = 1;
 
-	LOG_INF("uart2 up @ %d baud (VCOM1), %d B ring, control accepted from the host",
+	LOG_INF("link uart up @ %d baud (VCOM1), %d B ring, control accepted from the host",
 		CONFIG_DECTCAM_RX_UART_BAUD, CONFIG_DECTCAM_RX_RING_SIZE);
 	return 0;
 }

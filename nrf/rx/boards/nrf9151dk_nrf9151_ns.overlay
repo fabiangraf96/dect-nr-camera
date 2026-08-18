@@ -21,6 +21,15 @@
  * Without it the USB path silently discards bytes and video is unusable.
  */
 
+/ {
+	chosen {
+		/* Which instance carries the video, so the source does not have to
+		 * know. The nRF9131 EK cannot use uart2 -- instance 2 is its PMIC
+		 * i2c -- so the number is a board property, not an application one. */
+		dectcam,link-uart = &uart2;
+	};
+};
+
 &pinctrl {
 	uart2_default: uart2_default {
 		group1 {

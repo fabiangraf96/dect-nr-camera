@@ -1,14 +1,18 @@
 # DECT NR+ live camera link
 
 Live video from a camera module to a PC over a **DECT NR+** radio link built
-from two nRF9151 development kits.
+from a pair of Nordic nRF91 kits — either two **nRF9151 DKs** or two
+**nRF9131 EKs**.
 
 ```
 ┌────────────────┐  UART 1 Mbaud  ┌──────────────┐   DECT NR+    ┌──────────────┐  VCOM1 1 Mbaud ┌─────────┐
-│ ESP32-S3 + cam │ ─────────────► │ nRF9151 DK   │ ────────────► │ nRF9151 DK   │ ─────────────► │ PC      │
+│ ESP32-S3 + cam │ ─────────────► │ nRF91 kit    │ ────────────► │ nRF91 kit    │ ─────────────► │ PC      │
 │ JPEG frames    │  framed frags  │ transmitter  │   1.9 GHz     │ receiver     │  framed frags  │ viewer  │
 └────────────────┘                └──────────────┘               └──────────────┘                └─────────┘
 ```
+
+The camera board and its firmware are identical for both kits. Everything that
+differs is one overlay and one `.conf` per board under `nrf/<app>/boards/`.
 
 The sensor produces JPEG, the camera board chops each frame into fragments
 sized to exactly one DECT transport block, and both radio boards move those
@@ -49,7 +53,7 @@ another.
 
 | | |
 |---|---|
-| Radio | 2 × nRF9151 DK, with DECT NR+ modem firmware installed |
+| Radio | 2 × nRF9151 DK **or** 2 × nRF9131 EK, with DECT NR+ modem firmware installed |
 | Camera | ESP32-S3 board with an OV2640 or OV3660 sensor and PSRAM |
 | Wiring | 4 jumper wires plus ground, 2 series resistors |
 
@@ -57,7 +61,7 @@ Developed on a Freenove ESP32-S3 WROOM CAM, which is pin-compatible with
 Espressif's ESP32-S3-EYE. Any ESP32-S3 camera board works if you adjust the pin
 map in `esp32/main/cam.c`.
 
-DECT NR+ operation needs the DECT PHY modem firmware on the nRF9151, which is
+DECT NR+ operation needs the DECT PHY modem firmware on the nRF91, which is
 distributed separately by Nordic Semiconductor and is not part of this
 repository.
 
@@ -70,11 +74,12 @@ Each part builds with its own vendor toolchain; there is no top-level build.
 
 ```bash
 # 1. radio firmware  (needs nRF Connect SDK)
+#    swap in nrf9131ek/nrf9131/ns for the EK; keep the build dirs apart
 cd nrf
-west build -b nrf9151dk/nrf9151/ns -d build/tx tx
-west build -b nrf9151dk/nrf9151/ns -d build/rx rx
-west flash -d build/tx --dev-id <transmitter-serial>
-west flash -d build/rx --dev-id <receiver-serial>
+west build -b nrf9151dk/nrf9151/ns -d build/tx-9151dk tx
+west build -b nrf9151dk/nrf9151/ns -d build/rx-9151dk rx
+west flash -d build/tx-9151dk --dev-id <transmitter-serial>
+west flash -d build/rx-9151dk --dev-id <receiver-serial>
 
 # 2. camera firmware  (needs ESP-IDF)
 cd ../esp32

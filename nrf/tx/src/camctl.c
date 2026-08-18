@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * The uart2 link to the camera is full duplex: the camera sends video packets
+ * The uart link to the camera is full duplex: the camera sends video packets
  * on its TX line, and its RX line (our P0.03 -> ESP32-S3 GPIO21) would
  * otherwise be idle. This puts it to work as a control channel, so camera
  * parameters can be changed from the transmitter's own console.
@@ -66,7 +66,7 @@ static int send_line(const struct shell *sh, const char *line)
 	int err = write_line(line);
 
 	if (err == -ENODEV) {
-		shell_error(sh, "uart2 not ready");
+		shell_error(sh, "link uart not ready");
 	}
 	return err;
 }
@@ -209,7 +209,7 @@ static int cmd_dectstat(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-SHELL_CMD_ARG_REGISTER(cam, NULL, "Control the camera over the uart2 back-channel",
+SHELL_CMD_ARG_REGISTER(cam, NULL, "Control the camera over the uart back-channel",
 		       cmd_cam, 1, 8);
 SHELL_CMD_ARG_REGISTER(camraw, NULL, "Send a raw line to the camera", cmd_camraw, 1, 8);
 SHELL_CMD_REGISTER(dectstat, NULL, "Transmitter link and radio counters", cmd_dectstat);
