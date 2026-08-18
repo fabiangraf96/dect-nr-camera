@@ -26,7 +26,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from . import proto
+from . import portfind, proto
 from .reassembly import Reassembler
 from .source import SerialSource, FileSource
 
@@ -44,17 +44,14 @@ RX_PORT_GLOB = "usb-SEGGER_J-Link_*-if02"
 
 
 def find_rx_port() -> Optional[str]:
-    """Locate the receiver's VCOM1, or return None if it is ambiguous.
+    """Locate the port with video on it, or None if that is ambiguous.
 
-    Hard-coding a serial number would only ever work on one bench, so the
-    port is discovered instead. If several DKs are attached the choice is not
-    ours to guess -- the transmitter's VCOM1 looks exactly the same -- so the
-    caller is asked to name one with --port.
+    This used to glob for VCOM1 and take it if there was exactly one. That
+    stopped being right twice over: the nRF9131 EK sends video over VCOM0
+    rather than VCOM1, and with two kits attached the transmitter's ports look
+    identical to the receiver's. See portfind.
     """
-    matches = sorted(glob.glob(os.path.join(BY_ID_DIR, RX_PORT_GLOB)))
-    if len(matches) == 1:
-        return matches[0]
-    return None
+    return portfind.find_rx_port()
 
 # How long without a decoded frame before the picture is called stale.
 #
@@ -151,19 +148,25 @@ def main(argv=None) -> int:
     else:
         port = args.port or find_rx_port()
         if port is None:
-            found = sorted(glob.glob(os.path.join(BY_ID_DIR, RX_PORT_GLOB)))
-            print("could not decide which port to open.", file=sys.stderr)
+            found = portfind.candidates()
+            print("no port is sending video.", file=sys.stderr)
             if found:
-                print("\nSeveral DK data ports are attached; name one with --port:",
+                print("\nListened on each of these and heard nothing framed:",
                       file=sys.stderr)
                 for f in found:
                     print(f"  {f}", file=sys.stderr)
-                print("\nThe receiver is the board whose VCOM1 you have wired to "
-                      "nothing else;\nthe transmitter's VCOM1 is unused and looks "
-                      "identical from here.", file=sys.stderr)
+                print("\nThe video port is the RECEIVER's, and which one that is "
+                      "depends on the kit:\n"
+                      "  nRF9151 DK -> VCOM1, the -if02\n"
+                      "  nRF9131 EK -> VCOM0, the -if00   (it wires flow control "
+                      "there, not on VCOM1)\n"
+                      "The transmitter's ports look identical from here and carry "
+                      "no video.\n"
+                      "Name one explicitly with --port, or check that the camera "
+                      "is running.", file=sys.stderr)
             else:
-                print(f"\nNo {RX_PORT_GLOB} found under {BY_ID_DIR}.", file=sys.stderr)
-                print("Check that the receiver DK is plugged in, and on WSL that it "
+                print(f"\nNo J-Link serial ports under {BY_ID_DIR}.", file=sys.stderr)
+                print("Check that the receiver is plugged in, and on WSL that it "
                       "has been\nforwarded with usbipd.", file=sys.stderr)
             return 1
 

@@ -33,7 +33,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-from . import proto
+from . import portfind, proto
 from .control import Controller
 from .reassembly import Reassembler
 from .source import SerialSource, FileSource
@@ -58,8 +58,10 @@ STALE_AFTER_S = 2.0
 
 
 def find_rx_port() -> Optional[str]:
-    matches = sorted(glob.glob(os.path.join(BY_ID, RX_PORT_GLOB)))
-    return matches[0] if len(matches) == 1 else None
+    """The port with video on it. See portfind: globbing for VCOM1 stopped
+    being right when the EK turned out to use VCOM0, and it never could tell
+    the receiver from the transmitter anyway."""
+    return portfind.find_rx_port()
 
 
 class Reader(threading.Thread):
@@ -553,16 +555,21 @@ def main(argv=None) -> int:
     else:
         port = args.port or find_rx_port()
         if port is None:
-            found = sorted(glob.glob(os.path.join(BY_ID, RX_PORT_GLOB)))
-            print("could not decide which port to open.", file=sys.stderr)
+            found = portfind.candidates()
+            print("no port is sending video.", file=sys.stderr)
             if found:
-                print("\nSeveral DK data ports are attached; name one with --port:",
+                print("\nListened on each of these and heard nothing framed:",
                       file=sys.stderr)
                 for f in found:
                     print(f"  {f}", file=sys.stderr)
-            else:
-                print(f"\nNo {RX_PORT_GLOB} under {BY_ID}. Is the receiver attached?",
+                print("\nThe video port is the RECEIVER's: VCOM1 (-if02) on an "
+                      "nRF9151 DK,\nVCOM0 (-if00) on an nRF9131 EK. The "
+                      "transmitter's look identical and\ncarry no video. Name one "
+                      "with --port, or check the camera is running.",
                       file=sys.stderr)
+            else:
+                print(f"\nNo J-Link serial ports under {BY_ID}. Is the receiver "
+                      "attached?", file=sys.stderr)
             return 1
         source = SerialSource(port, args.baud, rtscts=True)
         write = source.write
