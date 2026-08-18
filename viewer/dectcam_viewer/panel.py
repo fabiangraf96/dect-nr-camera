@@ -166,6 +166,8 @@ class Panel:
         # rather than the time since the epoch.
         self._last_diag = time.monotonic()
         self._last_seen = 0
+        #: Set by close(); run_loop() watches this and tears the window down.
+        self.closing = False
         self._last_tick = 0.0
         self._tick_gap_max = 0.0
         self._draw_max = 0.0
@@ -343,8 +345,6 @@ class Panel:
             self._ctrl_max = 0.0
             self._lbl_max = 0.0
 
-        self.root.after(40, self.tick)
-
     def _draw_frame(self) -> None:
         with self.reader.lock:
             img = self.reader.frame
@@ -482,8 +482,51 @@ class Panel:
             var.set(s)
 
     def close(self) -> None:
+        # Just say so; run_loop() owns the window and does the tearing down.
+        # Destroying it from here would pull the widgets out from under the
+        # tick that is still running.
         self.reader.running = False
-        self.root.after(100, self.root.destroy)
+        self.closing = True
+
+
+def run_loop(root: tk.Tk, panel: "Panel", period: float = 0.04) -> None:
+    """Drive the window from here instead of handing control to Tk.
+
+    The obvious way to write this is root.mainloop() with the work scheduled by
+    root.after(40, ...). That is what this did, and in a WSLg session it stalls:
+    the window freezes for almost exactly 5.5 seconds at a time, over and over,
+    while frames keep arriving on time and our callback keeps returning in about
+    five milliseconds. The main thread was caught inside tkinter's mainloop on
+    every single sample.
+
+    It is not our code and not the video. scripts/tk_stall_test.py cuts it down
+    to a bare Tk window with an after(40) timer, no serial, no threads, not even
+    an image update, and it stalls identically -- one tick per 5.5 seconds. The
+    same loop drawn by OpenCV in the same session holds 24 ticks a second, which
+    is why run_viewer.sh was always smooth while this was not.
+
+    The difference is the waiting. mainloop() blocks until Tk decides there is
+    something to do, and it is that wait which hangs. update() handles what is
+    already pending and returns straight away, so the timing comes from the
+    sleep below rather than from Tk's scheduler. Same window, same widgets, same
+    redraws -- only who decides when to look. Measured: 23 ticks a second with a
+    49 ms worst gap, against one tick per 5.5 s.
+    """
+    root.protocol("WM_DELETE_WINDOW", panel.close)
+
+    while not panel.closing:
+        try:
+            panel.tick()
+            root.update()
+        except tk.TclError:
+            # The window went away underneath us -- closing it is not an error.
+            break
+        time.sleep(period)
+
+    try:
+        root.destroy()
+    except tk.TclError:
+        pass
 
 
 def main(argv=None) -> int:
@@ -534,9 +577,9 @@ def main(argv=None) -> int:
     reader.start()
 
     root = tk.Tk()
-    Panel(root, reader, ctrl, args.scale)
+    panel = Panel(root, reader, ctrl, args.scale)
     try:
-        root.mainloop()
+        run_loop(root, panel)
     finally:
         reader.running = False
         source.close()
