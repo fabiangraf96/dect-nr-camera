@@ -101,15 +101,24 @@ link quality.
   12      4    frags_out     fragments forwarded to the PC
    16      2    ring_peak     uint16, deepest the RX outbound ring got
                               since the last STATS, in bytes
+   18      2    rx_crc_bad    uint16, packets already corrupt when the
+                              modem handed them over
 ```
 
-Total 18 bytes. `ring_peak` is a high water mark over the interval, not a
+Total 20 bytes. `ring_peak` is a high water mark over the interval, not a
 running total, and it is read-and-cleared by exactly one caller.
 
-It is here rather than in the receiver's log because both virtual COM ports sit
-on one J-Link: while video flows on VCOM1 the VCOM0 console is starved and says
-nothing, which is precisely when the number is wanted. Divided by the byte rate
-it gives the delay the receiver is contributing — see `docs/results.md`.
+`rx_crc_bad` counts packets that failed *this* CRC at the moment the modem
+delivered them, before the receiver touched them. The DECT layer has its own
+CRC and reports separately, so in a healthy system this stays at zero and any
+corruption the PC sees must have happened on the way there. That distinction is
+what identified the EK's VCOM1 as the culprit rather than the radio.
+
+Both are carried in the packet rather than logged because the two virtual COM
+ports sit on one J-Link: while video flows the other port's console is starved
+and says nothing, which is precisely when the numbers are wanted. `ring_peak`
+divided by the byte rate gives the delay the receiver is contributing — see
+`docs/results.md`.
 
 `rssi_2` and `snr` are carried in **exactly** the representation
 `nrf_modem_dect_phy.h` reports them, so nothing is rounded on the way to the

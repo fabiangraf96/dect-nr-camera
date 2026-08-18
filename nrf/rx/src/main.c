@@ -28,6 +28,9 @@ static const struct gpio_dt_spec led_rx = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios
 
 static uint32_t s_forwarded;
 static uint32_t s_malformed;
+
+/* Packets whose CRC was already wrong when the modem handed them to us. */
+static uint32_t s_rx_crc_bad;
 static uint32_t s_padding_saved;
 
 /*
@@ -68,6 +71,30 @@ static void on_pdc(const uint8_t *data, size_t len)
 		ctrl_on_air_packet(data, total);
 	}
 
+	/*
+	 * Check our own CRC here, the instant the modem hands the packet over,
+	 * and before it goes anywhere near the ring or the UART.
+	 *
+	 * This settles an argument the other measurements could not. The DECT
+	 * layer reports pdc_crc_err = 0, so the radio delivered every packet
+	 * intact, and yet the PC sees about 60 % of them fail this same CRC.
+	 * The damage is therefore somewhere between the modem checking the
+	 * packet and the PC receiving it -- and that span contains both the
+	 * copy out of the modem's buffer and the whole UART path. Counting
+	 * failures here splits it in two: a non-zero count means the bytes
+	 * were already wrong when we got them, a zero count means we sent
+	 * good data and something downstream ruined it.
+	 */
+	{
+		const uint16_t want = dectcam_crc16(&data[DECTCAM_OFF_VERTYPE],
+						    (size_t)(DECTCAM_HDR_LEN - 2u) + plen);
+		const uint16_t got = dectcam_get_u16(&data[DECTCAM_OFF_PAYLOAD + plen]);
+
+		if (want != got) {
+			s_rx_crc_bad++;
+		}
+	}
+
 	if (uart_out_send(data, total) == 0) {
 		s_forwarded++;
 		s_padding_saved += (uint32_t)(len - total);
@@ -103,6 +130,7 @@ static void send_stats_packet(void)
 		.pdc_crc_err = rs.pdc_crc_err,
 		.frags_out = us.queued,
 		.ring_peak = (uint16_t)MIN(uart_out_take_peak(), UINT16_MAX),
+		.rx_crc_bad = (uint16_t)MIN(s_rx_crc_bad, UINT16_MAX),
 	};
 	uint8_t body[DECTCAM_STATS_LEN];
 	uint8_t pkt[DECTCAM_STATS_LEN + DECTCAM_OVERHEAD];

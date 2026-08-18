@@ -111,6 +111,31 @@ available for resolution or quality.
 The VCOM1 hop remains the ceiling. At HVGA the receiver starts dropping packets
 into it, which is what limits that row of the ladder.
 
+## nRF9131 EK
+
+Same firmware, same camera, same ESP32 pins. QVGA at q=6:
+
+| | nRF9151 DK | nRF9131 EK |
+|---|---|---|
+| Frames over 20 s | 280 | 275 |
+| Lost | 0 | 1 |
+| Frame rate | 14.0 fps | 13.7 fps |
+| Byte rate | 38.8 kB/s | 44.5 kB/s |
+| Frame gap, median / worst | — | 53 / 152 ms |
+
+Two board-specific findings, both of which cost real time:
+
+- **Video must leave the EK over VCOM0, not VCOM1.** The EK wires RTS/CTS on
+  VCOM0 only. On VCOM1 the receiver's own CRC check proves the data leaves the
+  board intact — 951 fragments queued, 0 corrupt, 0 DECT CRC errors, ring never
+  above empty — and 553 of them still arrive at the PC broken. See
+  `docs/wiring.md` for everything that was tried and did not help.
+- **The camera back-channel needs a level translator on the EK.** Its I/O rail
+  is 1.8 V, measured, and the ESP32-S3 needs 2.475 V to read a high. The video
+  direction is fine because it runs the other way; the return direction cannot
+  work without one, so runtime camera control from the PC is unavailable on the
+  EK as wired.
+
 ## Delay budget, measured
 
 QVGA at q=6, 13.9 fps, 41 kB/s. Latency is buffering, so each stage is measured

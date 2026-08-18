@@ -1,63 +1,61 @@
 /*
- * Receiver on the nRF9131 EK (PCA10165): uart3 routed to the EK's VCOM1 pads,
- * so the video stream leaves the board over the same USB-C cable that powers
- * it, exactly as on the nRF9151 DK.
+ * Receiver on the nRF9131 EK (PCA10165): video over VCOM0, console over RTT.
  *
- *   P0.24 = TX -> VCOM1 -> host
- *   P0.23 = RX <- VCOM1 <- host
+ *   P0.11 = TX  -> VCOM0 -> host
+ *   P0.12 = RX  <- VCOM0 <- host
+ *   P0.10 = RTS
+ *   P0.09 = CTS
  *
  * No wiring: the receiver needs no header pins at all, on either connector.
- * These are the pads the board's own device tree assigns to uart1, and uart1
- * is the second of the two serial ports the EK enumerates -- uart0 (P0.09 to
- * P0.12) is the console on VCOM0. Confirmed on hardware: 15 packets, 0 CRC
- * errors, no resynchronisation.
  *
- * Why uart3 and not uart2 as on the DK
- * ------------------------------------
- * On the nRF91 each peripheral instance number is shared by SPIM, SPIS, TWIM,
- * TWIS and UARTE, so only one of them can exist at a time:
+ * Why not VCOM1, which is where the DK puts it
+ * ---------------------------------------------
+ * VCOM1 works, but only for a trickle. Measured with video flowing, the
+ * receiver checked its own CRC on every packet the instant the modem handed it
+ * over and found not one bad -- 951 fragments queued, 0 corrupt, DECT CRC
+ * errors 0, outbound ring never above empty -- and the PC still saw 553 of
+ * those 951 arrive with a broken CRC. Clean in, clean out, ruined in between.
  *
- *     "Only one of the following peripherals can be enabled: SPI2, SPIM2,
- *      SPIS2, TWI2, TWIM2, TWIS2, UARTE2."
+ * The reason is that the EK does not connect RTS/CTS on VCOM1. Nothing can
+ * tell the receiver to wait, so whenever the interface MCU is busy the bytes
+ * in flight are simply gone. It is not a bandwidth problem and it does not
+ * respond to the usual levers: baud 1 M, 460800 and 115200 all fail, and the
+ * slower ones fail harder; fragment payloads of 687 and 128 bytes fail alike;
+ * chunk sizes of 512 and 2048 make no difference; nor does turning off the
+ * low-power async mode. Only the tiny packets sent while the line is otherwise
+ * idle -- metadata, statistics -- survive reliably.
  *
- * Instance 2 is taken here by i2c2, which is how the nPM1300 PMIC is reached,
- * and the PMIC powers the board. Instance 3 is taken by spi3, which exists
- * only for an external gd25wb256 flash that the board already leaves disabled,
- * so that is the one to reclaim.
+ * uart0 is the console on VCOM0, and unlike uart1 the board's own device tree
+ * gives it a full four-wire pinctrl including RTS and CTS. If those are wired
+ * through, this is the port that can carry video. The console moves to RTT,
+ * which costs nothing here: it was unusable during streaming anyway, because
+ * both virtual COM ports share one USB device and the video starves the
+ * console.
  *
- * No hardware flow control, and that is not a choice
- * --------------------------------------------------
- * The DK's VCOM1 carries RTS and CTS, and there they are REQUIRED: measured
- * over 20 s of continuous 1 Mbaud traffic, 13.1 % of blocks were lost without
- * them and 0.00 % with them.
- *
- * The EK does not wire them. With hw-flow-control enabled and the four-pin
- * pinctrl the board's uart1 declares, the receiver stalls outright:
- *
- *     <wrn> dectcam_rx: UART TX stalled; is the host asserting CTS?
- *
- * and the outbound queue backs up while not one byte reaches the PC. The host
- * had crtscts set and a reader attached, so it was asserting RTS; had P0.17
- * been connected to it, CTS would have gone active. Dropping to two wires and
- * no flow control, the same firmware streams cleanly.
- *
- * So this board cannot be throttled by the PC, and a host that stalls will
- * cost bytes rather than merely delay them. Two things make that survivable:
- * every packet is CRC-checked and any frame missing a fragment is discarded,
- * so loss degrades the picture rather than corrupting it; and the video needs
- * about 45 kB/s against the 100 kB/s this line carries, which is roughly half
- * the load the DK measurement was taken at. Whether that is enough headroom in
- * practice is a question for measurement once a camera is attached -- if loss
- * shows up, the answer is a lower baud rate here, not more wires.
+ * Instance 3 rather than 2, as everywhere on this board: on the nRF91 each
+ * instance number is shared by SPIM, SPIS, TWIM, TWIS and UARTE, instance 2 is
+ * the nPM1300's i2c2, and instance 3 is only an already-disabled flash.
  */
 
 / {
 	chosen {
-		/* Which instance carries the video, so the source does not have to
-		 * know. The two boards cannot agree on a number, and hard-coding
-		 * one of them into the C is what would make the other a fork. */
+		/* Which instance carries the video, so the source does not have
+		 * to know. The two boards cannot agree on a number. */
 		dectcam,link-uart = &uart3;
+
+		zephyr,console = &rtt0;
+		zephyr,shell-uart = &rtt0;
 	};
+
+	rtt0: rtt_chan0 {
+		compatible = "segger,rtt-uart";
+		status = "okay";
+	};
+};
+
+/* uart0 owns the VCOM0 pads by default; uart3 is taking them over. */
+&uart0 {
+	status = "disabled";
 };
 
 /* Frees instance 3 for uart3. Only the external flash used it, and that flash
@@ -69,18 +67,22 @@
 &pinctrl {
 	uart3_default: uart3_default {
 		group1 {
-			psels = <NRF_PSEL(UART_TX, 0, 24)>;
+			psels = <NRF_PSEL(UART_TX, 0, 11)>,
+				<NRF_PSEL(UART_RTS, 0, 10)>;
 		};
 		group2 {
-			psels = <NRF_PSEL(UART_RX, 0, 23)>;
+			psels = <NRF_PSEL(UART_RX, 0, 12)>,
+				<NRF_PSEL(UART_CTS, 0, 9)>;
 			bias-pull-up;
 		};
 	};
 
 	uart3_sleep: uart3_sleep {
 		group1 {
-			psels = <NRF_PSEL(UART_TX, 0, 24)>,
-				<NRF_PSEL(UART_RX, 0, 23)>;
+			psels = <NRF_PSEL(UART_TX, 0, 11)>,
+				<NRF_PSEL(UART_RX, 0, 12)>,
+				<NRF_PSEL(UART_RTS, 0, 10)>,
+				<NRF_PSEL(UART_CTS, 0, 9)>;
 			low-power-enable;
 		};
 	};
@@ -89,6 +91,7 @@
 &uart3 {
 	status = "okay";
 	current-speed = <1000000>;
+	hw-flow-control;
 	pinctrl-0 = <&uart3_default>;
 	pinctrl-1 = <&uart3_sleep>;
 	pinctrl-names = "default", "sleep";

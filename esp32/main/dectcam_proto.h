@@ -72,7 +72,7 @@ extern "C" {
 
 /* Payload sizes of the fixed-layout types. */
 #define DECTCAM_META_LEN      8u
-#define DECTCAM_STATS_LEN     18u
+#define DECTCAM_STATS_LEN     20u
 #define DECTCAM_CTRL_LEN      6u
 #define DECTCAM_RADIO_CFG_LEN 8u
 
@@ -367,6 +367,18 @@ struct dectcam_stats {
 	 * is silent at exactly the moment the number matters.
 	 */
 	uint16_t ring_peak;
+
+	/*
+	 * Packets whose application CRC was already wrong when the modem
+	 * handed them over, before anything of ours touched them.
+	 *
+	 * The DECT layer has its own CRC and reports no errors, so in a
+	 * healthy system this stays at zero and any corruption seen at the PC
+	 * must have happened on the way there. It is carried here rather than
+	 * logged because the two virtual COM ports share one USB device and
+	 * the console is starved exactly while video is flowing.
+	 */
+	uint16_t rx_crc_bad;
 };
 
 static inline void dectcam_stats_pack(uint8_t out[DECTCAM_STATS_LEN],
@@ -378,6 +390,7 @@ static inline void dectcam_stats_pack(uint8_t out[DECTCAM_STATS_LEN],
 	dectcam_put_u32(&out[8], s->pdc_crc_err);
 	dectcam_put_u32(&out[12], s->frags_out);
 	dectcam_put_u16(&out[16], s->ring_peak);
+	dectcam_put_u16(&out[18], s->rx_crc_bad);
 }
 
 static inline void dectcam_stats_unpack(const uint8_t in[DECTCAM_STATS_LEN],
@@ -389,6 +402,7 @@ static inline void dectcam_stats_unpack(const uint8_t in[DECTCAM_STATS_LEN],
 	s->pdc_crc_err = dectcam_get_u32(&in[8]);
 	s->frags_out = dectcam_get_u32(&in[12]);
 	s->ring_peak = dectcam_get_u16(&in[16]);
+	s->rx_crc_bad = dectcam_get_u16(&in[18]);
 }
 
 /* ------------------------------------------------------------------ */

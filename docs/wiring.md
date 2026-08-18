@@ -9,7 +9,8 @@ nRF end change, and those live in the per-board overlay.
 | Board target | `nrf9151dk/nrf9151/ns` | `nrf9131ek/nrf9131/ns` |
 | Link UART | `uart2` | `uart3` (instance 2 is the PMIC's i2c) |
 | TX header pins | Arduino D2/D3/D6/D7 | `P0.13`–`P0.16`, left header |
-| RX → PC | VCOM1, **with** RTS/CTS | VCOM1, **without** — not wired on this board |
+| RX → PC | **VCOM1** (`-if02`) | **VCOM0** (`-if00`) — VCOM1 has no RTS/CTS here |
+| RX console | VCOM0 | RTT (VCOM0 carries the video) |
 
 Jump to [nRF9131 EK](#nrf9131-ek-transmitter) if that is the board on the bench.
 
@@ -221,28 +222,56 @@ the button and `P0.29`–`P0.31` on the LEDs; that leaves `P0.13`–`P0.16`,
 Nothing to wire, on either board. Connect the RX kit to the PC with USB-C; the
 video stream arrives on **VCOM1**, the *second* serial port it enumerates.
 
-### The EK has no flow control on VCOM1
+### On the EK the video leaves over VCOM0, not VCOM1
 
-This is the one place the two boards genuinely differ, and it was found the
-hard way. With `hw-flow-control` enabled the EK receiver stalls outright:
+This is the one place the two kits genuinely differ, and it cost a long
+session to find. **The EK wires RTS/CTS on VCOM0 only.** VCOM1 has none, and
+without them the link is unusable.
+
+The failure is not subtle but it is deceptive, because every other number looks
+healthy. With video on VCOM1:
 
 ```
-<wrn> dectcam_rx: UART TX stalled; is the host asserting CTS?
+DECT CRC errors                     0
+corrupt when the modem handed over  0     <- receiver checks its own CRC here
+fragments queued to the PC        951
+arrived at the PC                 441 good, 553 with a broken CRC
+outbound ring high water mark       0 B
 ```
 
-The outbound queue backs up and not one byte reaches the PC. The host had
-`crtscts` set with a reader attached, so it *was* asserting RTS; had the EK
-connected it, CTS would have gone active. Drop to two wires and no flow
-control and the same firmware streams cleanly — 17 packets, 0 CRC errors.
+Clean in, clean out, ruined in between. The receiver verifies the application
+CRC the instant the modem gives it the packet, so the data provably left the
+board intact; roughly 60 % of it still arrived damaged.
 
-The consequence: **the EK receiver cannot be throttled by the PC**, so a host
-that stalls costs bytes rather than merely delaying them. Two things make that
-survivable — every packet is CRC-checked and any frame missing a fragment is
-discarded, so loss degrades the picture rather than corrupting it; and the
-video needs about 45 kB/s against the 100 kB/s the line carries. If loss does
-show up in practice, the fix is a lower baud rate in the EK overlay, not more
-wires. On the DK, keep flow control: there it is measured as the difference
-between 13.1 % loss and none.
+It does not respond to any of the usual levers, which is what makes it worth
+recording:
+
+| Tried | Result |
+|---|---|
+| baud 1 M / 460800 / 115200 | all fail, and slower fails *harder* |
+| fragment payload 687 → 128 B | no change (~58 % of packets bad either way) |
+| DMA chunk 512 → 2048 B | no change |
+| `UART_x_NRF_ASYNC_LOW_POWER=n` | no change |
+| raising the data rate to fill the line | no consistent change |
+| host `crtscts` on / off | no change |
+
+The only packets that survived reliably were the small ones sent while the line
+was otherwise idle — metadata and statistics, never a video fragment.
+
+Moving the same firmware to VCOM0, whose pinctrl in the board's own devicetree
+declares all four wires, fixes it completely:
+
+```
+1000 packets, 0 CRC errors, 1 resync
+ 192 frames,  0 lost (0.0 %), 13.7 fps at 44.7 kB/s
+```
+
+which is the DK's own figure. The receiver's console moves to RTT to make room,
+and loses nothing by it: both virtual COM ports share one USB device, so the
+console was starved into silence whenever video was flowing anyway.
+
+On the DK nothing changes — video stays on VCOM1, where flow control is wired
+and is the measured difference between 13.1 % loss and none.
 
 Three USB devices end up on the host. The EK enumerates exactly like the DK —
 `nrfutil device list` reports both as J-Link with `vcom: 0` and `vcom: 1`:
@@ -260,7 +289,8 @@ for whichever is present rather than hard-coding one.
 
 Address them through `/dev/serial/by-id/`, never `ttyACMx` — the numbering
 changes on every re-enumeration. `-if00` is VCOM0 and `-if02` is VCOM1, so the
-video port is the J-Link `-if02` of whichever kit you made the receiver.
+video port is the receiver kit's **`-if02` on a DK** and its **`-if00` on an
+EK**. `scripts/boards.sh` resolves this from `BOARD`.
 
 On the **DK**, the PC side **must** open VCOM1 with RTS/CTS enabled. Without it,
 measurements on this hardware showed 13 % byte loss at 1 Mbaud; with it, zero.

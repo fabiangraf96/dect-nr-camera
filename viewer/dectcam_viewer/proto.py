@@ -48,7 +48,7 @@ TYPE_CTRL = 4
 TYPE_RADIO_CFG = 5
 
 META_LEN = 8
-STATS_LEN = 18
+STATS_LEN = 20
 CTRL_LEN = 6
 RADIO_CFG_LEN = 8
 
@@ -178,15 +178,21 @@ class Stats:
     #: that the host has not been given yet. See ``ring_delay_s``.
     ring_peak: int = 0
 
+    #: Packets whose CRC was already wrong when the modem handed them to the
+    #: receiver, before anything of ours touched them. The DECT layer has its
+    #: own CRC and reports no errors, so anything here means the corruption
+    #: happened before the receiver rather than on the way to the PC.
+    rx_crc_bad: int = 0
+
     @classmethod
     def unpack(cls, b: bytes) -> "Stats":
-        r, s, ok, err, out, peak = struct.unpack("<hhIIIH", b[:STATS_LEN])
-        return cls(r, s, ok, err, out, peak)
+        r, s, ok, err, out, peak, badcrc = struct.unpack("<hhIIIHH", b[:STATS_LEN])
+        return cls(r, s, ok, err, out, peak, badcrc)
 
     def pack(self) -> bytes:
         return struct.pack(
-            "<hhIIIH", self.rssi_2, self.snr, self.pdc_ok,
-            self.pdc_crc_err, self.frags_out, self.ring_peak,
+            "<hhIIIHH", self.rssi_2, self.snr, self.pdc_ok,
+            self.pdc_crc_err, self.frags_out, self.ring_peak, self.rx_crc_bad,
         )
 
     def ring_delay_s(self, byte_rate: float) -> Optional[float]:
