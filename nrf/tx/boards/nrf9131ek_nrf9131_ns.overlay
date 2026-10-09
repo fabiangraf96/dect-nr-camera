@@ -4,7 +4,7 @@
  *
  *   P0.13 = RX  (from ESP32-S3 GPIO42)
  *   P0.14 = TX  (to   ESP32-S3 GPIO21)
- *   P0.15 = RTS (to   ESP32-S3 GPIO1  / CTS)
+ *   P0.15 = RTS (to   ESP32-S3 GPIO41 / CTS)
  *   P0.16 = CTS (from ESP32-S3 GPIO47 / RTS)
  *
  * One connector only, as required. The EK breaks out P0.13 to P0.31 on the
@@ -38,7 +38,45 @@
  * ESP32 drives the line, and if that wire is ever missing the input reads as
  * asserted and the transmitter keeps working, rather than floating and
  * behaving unpredictably.
+ *
+ * VDD_IO raised to 3.0 V
+ * -----------------------
+ * The board ships with both nPM1300 buck outputs pinned to 1.8 V, which is
+ * fine for the video direction (ESP32 3.3 V into a 1.8 V input, clamped safely
+ * by the 1 kOhm series resistors) but not for the return path: the ESP32-S3
+ * needs 0.75 x 3.3 V = 2.475 V to read a logic high, and 1.8 V never reaches
+ * that. With the camera unplugged, measured on the header VDD pin: 1.8 V at
+ * the board's default, 3.0 V with the override below.
+ *
+ * Both BUCK1 and BUCK2 are moved together. Neither is named, labelled, or
+ * connected to a documented consumer anywhere in the board's device tree, so
+ * there is no way to tell which one is VDD_IO from the files alone; moving
+ * only one risks leaving the SiP under-supplied on whichever rail was guessed
+ * wrong. 3.0 V rather than the driver's 3.3 V ceiling matches what the nRF9151
+ * DK already runs at and what the ESP32-S3 side already tolerates, keeping a
+ * margin to the nPM1300's actual maximum instead of testing at it.
+ *
+ * This changes the level on every pin fed by this rail, uart3 included, which
+ * is the point: it moves this board's camera link onto the same 3.0 V regime
+ * as the DK, so the same wiring notes apply unchanged -- the two series
+ * resistors on the ESP32-to-nRF lines stay mandatory. See docs/wiring.md.
  */
+
+&pmic_main {
+	regulators {
+		BUCK1 {
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-init-microvolt = <3000000>;
+		};
+
+		BUCK2 {
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-init-microvolt = <3000000>;
+		};
+	};
+};
 
 / {
 	chosen {

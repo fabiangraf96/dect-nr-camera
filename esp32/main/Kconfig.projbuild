@@ -127,11 +127,18 @@ config DECTCAM_UART_FLOWCTRL
 
 config DECTCAM_UART_CTS_GPIO
     int "UART CTS GPIO (from nRF9151 RTS)"
-    default 1
+    default 41
     depends on DECTCAM_UART_FLOWCTRL
     help
       Input. The nRF asserts this when its receive buffer is filling, which
       stops us mid-stream instead of letting bytes fall on the floor.
+
+      GPIO41 rather than the earlier GPIO1: both are free and boot-safe, but
+      GPIO1 sits on row 3 of the right-hand header while TX/RX/RTS/GND sit on
+      rows 5/16/17/20. On a 17-row breadboard that span cannot be covered
+      without a pin hanging off the end. GPIO41 (row 6) keeps all five
+      required pins inside a single 17-row window (rows 4-20) together with
+      GND, with nothing unsupported. See docs/wiring.md.
 
 config DECTCAM_UART_CTS_INVERT
     bool "Invert the CTS input"

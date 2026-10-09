@@ -192,7 +192,7 @@ void console_exec_line(const char *line)
 }
 
 /*
- * Sample the CTS pin (GPIO1), which carries the nRF9151 DK's RTS output
+ * Sample the CTS pin (GPIO41), which carries the nRF9151 DK's RTS output
  * from D6, and report whether it is switching, stuck, or absent.
  *
  * Digital, not analogue, and deliberately so. The earlier version of this

@@ -7,7 +7,7 @@ from two nRF9151 DKs.
 
 ```
 ┌────────────────┐  UART 1 Mbaud  ┌──────────────┐   DECT NR+    ┌──────────────┐  VCOM1 1 Mbaud ┌─────────┐
-│ Freenove S3    │ GPIO42/21/1/47 │ nRF9151DK TX │   1.9 GHz     │ nRF9151DK RX │  over USB-C    │ PC      │
+│ Freenove S3    │ GPIO42/21/41/47│ nRF9151DK TX │   1.9 GHz     │ nRF9151DK RX │  over USB-C    │ PC      │
 │ OV3660 → JPEG  │ ─────────────► │ uart2 ──► TX │ ────────────► │ RX ──► uart2 │ ─────────────► │ viewer  │
 │ ESP-IDF v5.4.2 │  framed frags  │  DECT PDC    │   PDC frames  │  DECT PDC    │  framed frags  │ Python  │
 └────────────────┘                └──────────────┘               └──────────────┘                └─────────┘

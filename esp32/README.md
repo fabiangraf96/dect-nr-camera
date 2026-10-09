@@ -108,19 +108,27 @@ automatically.
 
 The camera, microSD, PSRAM, native USB and the console take most of the GPIOs.
 Excluding the strapping pins (0, 3, 45, 46) and the on-board LEDs (2, 48), what
-is left for the link is `GPIO1`, `GPIO14`, `GPIO21`, `GPIO42`, `GPIO47`.
+is left for the link is `GPIO14`, `GPIO21`, `GPIO41`, `GPIO42`, `GPIO47`.
 
 | Signal | Pin | To the DK | |
 |---|---|---|---|
 | TX (video) | `GPIO42` | D2 | 1 kΩ in series |
 | RX (commands) | `GPIO21` | D3 | |
-| CTS | `GPIO1` | D6 | |
+| CTS | `GPIO41` | D6 | |
 | RTS | `GPIO47` | D7 | 1 kΩ in series |
 
 `GPIO42` rather than the more obvious `GPIO14`: the latter is on the module's
 **left-hand** header while everything else is on the right, and in a breadboard
 the module covers the left header completely. `GPIO42` is a JTAG pad (MTMS),
 free here because the S3 debugs over its native USB.
+
+`GPIO41` rather than `GPIO1` for CTS: both are equally free, but `GPIO1` sits
+on row 3 of the right-hand header while TX/RX/RTS/GND sit on rows 5/16/17/20.
+On a short breadboard (17 rows) that 18-row span cannot be covered without a
+pin hanging unsupported off one end. `GPIO41` sits on row 6, which keeps all
+five required pins — TX, CTS, RTS, RX and GND — inside one contiguous 17-row
+window (rows 4–20). See [`../docs/wiring.md`](../docs/wiring.md#breadboard-footprint)
+for the row-by-row layout.
 
 See [`../docs/wiring.md`](../docs/wiring.md) for the full rationale and the
 series resistors.

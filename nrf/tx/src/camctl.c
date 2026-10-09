@@ -204,7 +204,7 @@ static int cmd_dectstat(const struct shell *sh, size_t argc, char **argv)
 		shell_warn(sh, "No bytes at all from the camera. Check that it is powered");
 		shell_warn(sh, "and that GPIO42 reaches P0.02 (Arduino D2).");
 		shell_warn(sh, "If the camera reports 'link stalled', it is being held off");
-		shell_warn(sh, "by flow control: check GPIO1 against P0.06 (Arduino D6).");
+		shell_warn(sh, "by flow control: check GPIO41 against P0.06 (Arduino D6).");
 	}
 	return 0;
 }

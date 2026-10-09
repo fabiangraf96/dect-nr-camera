@@ -3,7 +3,7 @@
  *
  *   P0.02 = Arduino D2 = RX  (from ESP32-S3 GPIO42)
  *   P0.03 = Arduino D3 = TX  (to   ESP32-S3 GPIO21)
- *   P0.06 = Arduino D6 = RTS (to   ESP32-S3 GPIO1  / CTS)
+ *   P0.06 = Arduino D6 = RTS (to   ESP32-S3 GPIO41 / CTS)
  *   P0.07 = Arduino D7 = CTS (from ESP32-S3 GPIO47 / RTS)
  *
  * uart1 is not used: nrf9151dk_nrf9151_ns.dts disables it because TF-M claims

@@ -26,7 +26,7 @@ can sit in a breadboard with only that side reachable.
 |---|---|---|---|---|---|
 | 1 | `GPIO42` | video, ESP32 TX → nRF RX | Arduino **D2** | `P0.02` | 1 kΩ series |
 | 2 | `GPIO21` | commands, ESP32 RX ← nRF TX | Arduino **D3** | `P0.03` | — |
-| 3 | `GPIO1` | ESP32 CTS ← nRF RTS | Arduino **D6** | `P0.06` | — |
+| 3 | `GPIO41` | ESP32 CTS ← nRF RTS | Arduino **D6** | `P0.06` | — |
 | 4 | `GPIO47` | ESP32 RTS → nRF CTS | Arduino **D7** | `P0.07` | 1 kΩ series |
 | 5 | `GND` | ground | any `GND` | — | — |
 
@@ -35,7 +35,7 @@ can sit in a breadboard with only that side reachable.
     ┌────────────────────────┐              ┌────────────────────┐
     │ GPIO42 ○──[1k]─────────┼─── video ───►│○ D2  (P0.02)  RX   │
     │ GPIO21 ○◄──────────────┼─── commands ─│○ D3  (P0.03)  TX   │
-    │ GPIO1  ○◄──────────────┼─── RTS ──────│○ D6  (P0.06)  RTS  │
+    │ GPIO41 ○◄──────────────┼─── RTS ──────│○ D6  (P0.06)  RTS  │
     │ GPIO47 ○──[1k]─────────┼─── CTS ─────►│○ D7  (P0.07)  CTS  │
     │ GND    ○───────────────┼─── ground ───│○ GND               │
     │                        │              │                    │
@@ -49,10 +49,10 @@ Order of the four signals down the right-hand header, so they are easy to find:
 ```
     GPIO43  console TX
     GPIO44  console RX
-    GPIO1   <- CTS          wire 3
+    GPIO1
     GPIO2
     GPIO42  <- TX           wire 1
-    GPIO41
+    GPIO41  <- CTS          wire 3
     ... microSD, PSRAM, straps ...
     GPIO47  <- RTS          wire 4
     GPIO21  <- RX           wire 2
@@ -130,7 +130,12 @@ reached at all.
 no boot strapping function. The S3 debugs over its native USB rather than these
 pads, so nothing is given up by using it.
 
-`GPIO41` is equally free if `GPIO42` is ever awkward.
+`GPIO41` carries CTS, not `GPIO1` as in the first revision of this wiring.
+Both are free and boot-safe, but `GPIO1` sits on row 3 of the right-hand
+header while TX/RX/RTS/GND sit on rows 5/16/17/20 — an 18-row span that does
+not fit on a 17-row breadboard without a pin hanging unsupported off one end.
+`GPIO41` sits on row 6, which brings the span down to 17 rows (4–20) and
+nothing is left dangling. See [Breadboard footprint](#breadboard-footprint).
 
 ## Why these nRF9151 pins
 
@@ -183,7 +188,7 @@ header is not needed at all.
 |---|---|---|---|---|
 | 1 | `GPIO42` | video, ESP32 TX → nRF RX | `P0.13` | 1 kΩ series |
 | 2 | `GPIO21` | commands, ESP32 RX ← nRF TX | `P0.14` | — |
-| 3 | `GPIO1` | ESP32 CTS ← nRF RTS | `P0.15` | — |
+| 3 | `GPIO41` | ESP32 CTS ← nRF RTS | `P0.15` | — |
 | 4 | `GPIO47` | ESP32 RTS → nRF CTS | `P0.16` | 1 kΩ series |
 | 5 | `GND` | ground | `GND` between `P0.13` and `P0.14` | — |
 
@@ -216,6 +221,82 @@ the button and `P0.29`–`P0.31` on the LEDs; that leaves `P0.13`–`P0.16`,
 > applies here too and the same no-meter diagnostic works — see
 > [Telling a 3.0 V rail from a 1.8 V one](#telling-a-30-v-rail-from-a-18-v-one-without-a-meter).
 > Fit the 1 kΩ resistors and the wiring is safe either way.
+
+## Breadboard footprint
+
+The transmitter pair (ESP32-S3 + nRF9131 EK) is built on a single 17-row mini
+breadboard (SYB-170 class), which is too short to seat either header in full
+and too narrow for a board's second header to reach the strips at all. Both
+boards therefore sit exactly as the sections above already assume — ESP32-S3
+right header only, nRF9131 EK left header only — just with the added
+constraint that every *used* pin has to land inside 17 consecutive rows, with
+nothing required hanging off either end.
+
+The two headers go into the two strips either side of the centre channel,
+which is what makes this possible at all: the channel keeps them from
+shorting even where their row numbers overlap. **Every connection between the
+two boards still needs its own jumper wire across the channel** — landing in
+the same row number on both sides does not connect them to each other.
+
+### ESP32-S3, right header, shifted up 3 rows (BB row = module pin row − 3)
+
+The module's own GND is its *last* pin (module row 20) and is the reason for
+the shift: `GPIO42`, `GPIO41`, `GPIO47` and `GPIO21` span rows 5–17 on their
+own, but together with GND the full span is rows 5–20 — 16 rows, one less
+than the board has, so the whole group fits as long as the module is pushed
+up far enough that row 20 lands on the board's last row (17). This is also
+why CTS moved off `GPIO1` (module row 3): with `GPIO1`, the span would start
+at row 3 instead of row 5, making it 18 rows — one too many, no matter how the
+module is shifted.
+
+| BB row | Module pin | Used for |
+|---|---|---|
+| −2, −1, 0 (past the near edge) | `TX`, `RX`, `GPIO1` | not used |
+| 1 | `GPIO2` | not used |
+| 2 | `GPIO42` | **video TX → nRF RX, 1 kΩ series** |
+| 3 | `GPIO41` | **CTS ← nRF RTS** |
+| 4–12 | microSD / PSRAM / strapping pins | not used |
+| 13 | `GPIO47` | **RTS → nRF CTS, 1 kΩ series** |
+| 14 | `GPIO21` | **RX ← nRF TX (commands)** |
+| 15 | `GPIO20` | not used |
+| 16 | `GPIO19` | not used |
+| 17 | `GND` | **ground** |
+
+Only `TX`, `RX` and `GPIO1` — all three already unused — stick out past the
+near edge. Nothing required overhangs anywhere.
+
+### nRF9131 EK, left header, plugged in flush (BB row = module pin row)
+
+| BB row | Module pin | Used for |
+|---|---|---|
+| 1–3 | `GPIO2`, `RST`, `VDD` | not used |
+| 4 | `P0.13` | **video RX ← ESP32 TX** |
+| 5 | `GND` | **ground** |
+| 6 | `P0.14` | **TX → ESP32 RX (commands)** |
+| 7 | `P0.15` | **RTS → ESP32 CTS** |
+| 8 | `P0.16` | **CTS ← ESP32 RTS** |
+| 9–17 | `P0.17`–`P0.25` | not used |
+
+Rows 18–23 (`P0.26`–`P0.31`) hang past the far edge — also unused (VCOM1,
+button, LEDs), so nothing is lost here either. No shift is needed on this
+side: the required pins already sit at the near end of a 23-row header.
+
+### The five jumpers across the centre channel
+
+| # | ESP32-S3 (BB row) | nRF9131 EK (BB row) | Part |
+|---|---|---|---|
+| 1 | 2 `GPIO42` | 4 `P0.13` | 1 kΩ series |
+| 2 | 14 `GPIO21` | 6 `P0.14` | — |
+| 3 | 3 `GPIO41` | 7 `P0.15` | — |
+| 4 | 13 `GPIO47` | 8 `P0.16` | 1 kΩ series |
+| 5 | 17 `GND` | 5 `GND` | — |
+
+All five land on fully-seated pins on both sides — no flying leads, no pins
+grabbed past the edge of the board.
+
+Everything that protrudes past either end of the breadboard (ESP32-S3's `TX`,
+`RX`, `GPIO1` at the near end; nRF9131 EK's `P0.26`–`P0.31` at the far end) is
+electrically dead and needs no wire at all.
 
 ## Receiver board
 
