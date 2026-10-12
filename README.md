@@ -1,8 +1,12 @@
 # DECT NR+ live camera link
 
 Live video from a camera module to a PC over a **DECT NR+** radio link built
-from a pair of Nordic nRF91 kits — either two **nRF9151 DKs** or two
-**nRF9131 EKs**.
+from a pair of Nordic nRF91 kits.
+The image below shows an example setup: nRF9131EK acting as **receiver** (left), ESP32-S3 camera connected to a nRF9131EK acting as **transmitter** (right).
+
+<p align="center">
+  <img src="docs/setup_transparent.png" alt="setup" width="350" />
+</p>
 
 ```
 ┌────────────────┐  UART 1 Mbaud  ┌──────────────┐   DECT NR+    ┌──────────────┐  VCOM1 1 Mbaud ┌─────────┐
@@ -105,6 +109,10 @@ the picture:
 ```bash
 cd viewer && ./run_panel.sh
 ```
+
+<p align="center">
+  <img src="docs/panel_viewer.png" alt="setup" width="450" />
+</p>
 
 | Radio | Camera |
 |---|---|
