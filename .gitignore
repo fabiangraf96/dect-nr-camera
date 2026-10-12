@@ -29,7 +29,7 @@ __pycache__/
 *.pcap
 captures/
 frames/
-*.png
+
 
 # --- local-only ---------------------------------------------------------------
 # Helper scripts for this particular bench: they hard-code board serial
